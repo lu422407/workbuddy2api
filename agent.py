@@ -130,6 +130,20 @@ def accounts_view():
 STATIC_MODELS = ["deepseek-v4.1-flash", "deepseek-v4-flash"]
 
 
+def lan_ip():
+    """本机主局域网 IP：UDP connect 不发包，只问内核「去公网走哪个源地址」。
+    无默认路由/断网时返回空串。"""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except Exception:  # noqa: BLE001
+        return ""
+    finally:
+        s.close()
+
+
 def connection_view():
     """第三方工具（如 Deepseek-Harness-Desktop）接入 wb2api 所需的三件套。
 
@@ -138,12 +152,12 @@ def connection_view():
     这里只是透传，不另设缓存）。取不到（服务没起/超时）才回退 STATIC_MODELS，
     models_source 字段如实标注来源。该端点仅绑 127.0.0.1，不发到任何地方。
     """
-    port, key = 7863, ""
+    port, key, listen = 7863, "", ""
     try:
         with open(CONFIG, encoding="utf-8") as f:
             cfg = json.load(f)
         key = cfg.get("api_key") or ""
-        listen = cfg.get("listen", ":7863")
+        listen = str(cfg.get("listen", ":7863"))
         if ":" in listen:
             port = int(listen.rsplit(":", 1)[1])
     except Exception:  # noqa: BLE001 — 读不到配置时给默认端口
@@ -162,7 +176,11 @@ def connection_view():
             source = "upstream"
     except Exception:  # noqa: BLE001 — 上游不可达用静态表，不报错
         pass
+    # 局域网地址仅在 listen 绑了非回环（0.0.0.0 或裸 :port）时给出
+    exposed = listen == "" or listen.startswith(":") or listen.startswith("0.0.0.0") or listen.startswith("*")
+    ip = lan_ip() if exposed else ""
     return {"ok": True, "base_url": f"http://127.0.0.1:{port}/v1",
+            "lan_url": f"http://{ip}:{port}/v1" if ip else "",
             "api_key": key, "models": models, "models_source": source}
 
 

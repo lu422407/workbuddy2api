@@ -213,6 +213,9 @@
         <span class="k">Base URL</span>
         <span class="row"><code id="c-url">-</code>
           <button class="small" data-copy="c-url">复制</button></span>
+        <span class="k" id="c-lan-k" style="display:none">局域网</span>
+        <span class="row" id="c-lan-row" style="display:none"><code id="c-lan">-</code>
+          <button class="small" data-copy="c-lan">复制</button></span>
         <span class="k">API Key</span>
         <span class="row"><code id="c-key">-</code>
           <button class="small" id="btn-key-eye">显示</button>
@@ -220,7 +223,7 @@
         <span class="k">模型</span>
         <span class="row" id="c-models"></span>
       </div>
-      <div class="muted" style="margin-top:10px">把以上信息填入任意 OpenAI 兼容客户端即可直连。</div>
+      <div class="muted" style="margin-top:10px">本机客户端用 Base URL；局域网内其他设备用上面的局域网地址，API Key 相同。</div>
     </section>
 
     <section class="card">
@@ -514,6 +517,10 @@ async function loadConnection() {
   try {
     const d = await api("/connection");
     $("#c-url").textContent = d.base_url;
+    if (d.lan_url) {
+      $("#c-lan").textContent = d.lan_url;
+      $("#c-lan-k").style.display = ""; $("#c-lan-row").style.display = "flex";
+    }
     KEY_RAW = d.api_key || ""; renderKey();
     MODELS = [...new Set([...(d.models || []), ...MODELS])];
     renderModelBadges(d.models_source === "upstream");
