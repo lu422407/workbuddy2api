@@ -34,3 +34,10 @@ docs/
 # 设计/计划文档（但 README.md 必须进版本库）
 *.md
 !README.md
+
+# 本地工具链与产物（Mac 侧部署）
+.gotool/
+/signin
+/expiry
+*.bak
+__pycache__/

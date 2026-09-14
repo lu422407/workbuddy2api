@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WorkBuddy 控制台</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#131825; --panel2:#0f141f; --line:#232b3d;
+    --tx:#dde5f2; --tx2:#8a96ac; --acc:#7c5cff; --acc2:#38c8ff;
+    --ok:#2fd68a; --warn:#ffb454; --bad:#ff5d73;
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  body{background:radial-gradient(1200px 700px at 80% -10%, #1b2240 0%, var(--bg) 55%);
+    color:var(--tx); font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+    min-height:100vh; padding-bottom:60px}
+  header{position:sticky; top:0; z-index:20; backdrop-filter:blur(12px);
+    background:rgba(11,14,20,.75); border-bottom:1px solid var(--line);
+    display:flex; align-items:center; gap:14px; padding:13px 22px; flex-wrap:wrap}
+  .logo{width:34px;height:34px;border-radius:10px;flex:none;
+    background:conic-gradient(from 210deg,var(--acc),var(--acc2),var(--acc));
+    display:grid;place-items:center;font-weight:800;color:#fff;font-size:17px}
+  h1{font-size:16px;font-weight:700;letter-spacing:.5px}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .chip{display:inline-flex;align-items:center;gap:6px;padding:3px 11px;border-radius:99px;
+    border:1px solid var(--line); background:var(--panel2); font-size:12.5px; color:var(--tx2)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--tx2);flex:none}
+  .dot.ok{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  .dot.bad{background:var(--bad);box-shadow:0 0 8px var(--bad)}
+  .grow{flex:1}
+  button{cursor:pointer;border:1px solid var(--line);background:var(--panel2);color:var(--tx);
+    border-radius:9px;padding:7px 14px;font-size:13px;transition:.15s;font-family:inherit}
+  button:hover{border-color:var(--acc);color:#fff;transform:translateY(-1px)}
+  button:disabled{opacity:.45;cursor:not-allowed;transform:none}
+  button.primary{background:linear-gradient(120deg,var(--acc),#5a3de8);border:none;color:#fff;font-weight:600}
+  button.primary:hover{filter:brightness(1.15)}
+  button.small{padding:4px 10px;font-size:12px;border-radius:7px}
+  main{max-width:1240px;margin:24px auto 0;padding:0 22px;display:grid;gap:20px;
+    grid-template-columns:1.55fr 1fr;align-items:start}
+  @media (max-width:980px){main{grid-template-columns:1fr}}
+  .card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);
+    border-radius:16px;padding:17px 19px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+  .card h2{font-size:14px;font-weight:700;margin-bottom:13px;display:flex;align-items:center;gap:8px}
+  .card h2 .ico{width:22px;height:22px;border-radius:7px;display:grid;place-items:center;font-size:13px;
+    background:rgba(124,92,255,.15);color:var(--acc2)}
+  .card .act{margin-left:auto;display:flex;gap:8px;align-items:center}
+  .muted{color:var(--tx2);font-size:12.5px}
+  .num{font-family:ui-monospace,monospace;font-size:12.5px}
+
+  /* 顶部统计砖 */
+  .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  @media (max-width:700px){.tiles{grid-template-columns:repeat(2,1fr)}}
+  .tile{background:linear-gradient(160deg,var(--panel),var(--panel2));border:1px solid var(--line);
+    border-radius:14px;padding:13px 15px}
+  .tile b{display:block;font-size:20px;font-weight:800;letter-spacing:.3px;
+    background:linear-gradient(90deg,#fff,#a9b8d8);-webkit-background-clip:text;background-clip:text;
+    -webkit-text-fill-color:transparent}
+  .tile.hot b{background:linear-gradient(90deg,var(--warn),var(--bad));-webkit-background-clip:text;background-clip:text}
+  .tile span{font-size:12px;color:var(--tx2)}
+
+  /* 账号卡片 */
+  .acards{display:grid;grid-template-columns:repeat(auto-fill,minmax(255px,1fr));gap:12px;margin-top:14px}
+  .acct{background:var(--panel2);border:1px solid var(--line);border-radius:13px;padding:13px 14px;
+    position:relative;transition:.15s}
+  .acct:hover{transform:translateY(-2px);border-color:#2e3a55}
+  .acct.due7{border-color:rgba(255,180,84,.5)}
+  .acct.due3{border-color:rgba(255,93,115,.55)}
+  .acct .top{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  .avatar{width:30px;height:30px;border-radius:9px;flex:none;display:grid;place-items:center;
+    font-weight:700;font-size:13px;color:#fff;background:linear-gradient(135deg,var(--acc),var(--acc2))}
+  .nick{font-weight:650;font-size:13.5px;line-height:1.25}
+  .uid8{font-size:11px;color:var(--tx2);font-family:ui-monospace,monospace}
+  .stbadge{margin-left:auto;font-size:11px;padding:2px 9px;border-radius:99px;border:1px solid var(--line)}
+  .stbadge.ok{color:var(--ok);border-color:rgba(47,214,138,.35);background:rgba(47,214,138,.07)}
+  .stbadge.warn{color:var(--warn);border-color:rgba(255,180,84,.4);background:rgba(255,180,84,.08)}
+  .stbadge.bad{color:var(--bad);border-color:rgba(255,93,115,.4);background:rgba(255,93,115,.08)}
+  .bar{height:7px;border-radius:99px;background:#1e2635;overflow:hidden;margin:7px 0 4px}
+  .bar i{display:block;height:100%;border-radius:99px;
+    background:linear-gradient(90deg,var(--acc2),var(--acc));transition:width .5s}
+  .bar.low i{background:linear-gradient(90deg,var(--warn),var(--bad))}
+  .cr{display:flex;justify-content:space-between;align-items:baseline}
+  .cr .big{font-size:16px;font-weight:750}
+  .cr .pct{font-size:11.5px;color:var(--tx2)}
+  .due{display:flex;gap:6px;align-items:center;margin-top:9px;flex-wrap:wrap}
+  .due .tag{font-size:11px;padding:2px 8px;border-radius:6px;border:1px solid var(--line);color:var(--tx2)}
+  .due .tag.warn{color:var(--warn);border-color:rgba(255,180,84,.35)}
+  .due .tag.bad{color:var(--bad);border-color:rgba(255,93,115,.4);background:rgba(255,93,115,.06)}
+  .foot{display:flex;align-items:center;gap:8px;margin-top:11px}
+  .foot .scount{font-size:11px;color:var(--tx2)}
+  .foot button{margin-left:auto}
+  details.pk{margin-top:9px;border-top:1px dashed var(--line);padding-top:8px}
+  details.pk summary{font-size:11.5px;color:var(--tx2);cursor:pointer;user-select:none}
+  .prow{display:flex;justify-content:space-between;font-size:11.5px;padding:3px 0;color:var(--tx2)}
+  .prow b{color:var(--tx);font-weight:600}
+
+  /* 签到热力 */
+  .heat{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px}
+  .cell{width:14px;height:14px;border-radius:4px;background:#1a2131;border:1px solid var(--line)}
+  .cell.ok{background:rgba(47,214,138,.55);border-color:transparent}
+  .cell.mix{background:linear-gradient(135deg,rgba(47,214,138,.55),rgba(255,93,115,.6));border-color:transparent}
+  .cell.fail{background:rgba(255,93,115,.55);border-color:transparent}
+  .logline{display:flex;gap:10px;font-size:12px;padding:5px 0;border-bottom:1px solid var(--line);align-items:center}
+  .logline:last-child{border-bottom:none}
+  .tag-ok{color:var(--ok)} .tag-bad{color:var(--bad)}
+
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .kv{display:grid;grid-template-columns:74px 1fr;gap:8px 10px;align-items:center;font-size:13px}
+  .kv .k{color:var(--tx2)}
+  code{font-family:ui-monospace,monospace;font-size:12.5px;background:#1a2131;border:1px solid var(--line);
+    padding:3px 8px;border-radius:7px;color:#c9d6ff;word-break:break-all}
+  input[type=text],select,textarea{width:100%;background:#1a2131;border:1px solid var(--line);color:var(--tx);
+    border-radius:9px;padding:8px 11px;font-size:13px;font-family:inherit;outline:none}
+  input:focus,select:focus,textarea:focus{border-color:var(--acc)}
+  textarea{resize:vertical;min-height:64px}
+  .loginbox{border:1px dashed var(--acc);background:rgba(124,92,255,.06);border-radius:12px;
+    padding:13px 15px;margin-top:13px;display:none}
+  #toast{position:fixed;right:22px;bottom:22px;display:flex;flex-direction:column;gap:10px;z-index:99}
+  .toast{background:#1c2437;border:1px solid var(--line);border-left:3px solid var(--acc);
+    padding:11px 16px;border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,.5);
+    font-size:13px;max-width:340px;animation:in .25s}
+  .toast.err{border-left-color:var(--bad)} .toast.ok{border-left-color:var(--ok)}
+  @keyframes in{from{opacity:0;transform:translateY(8px)}to{opacity:1}}
+  .out{background:#0d1220;border:1px solid var(--line);border-radius:11px;padding:13px 15px;
+    margin-top:12px;min-height:56px;max-height:320px;overflow:auto;white-space:pre-wrap;
+    font-size:13px;line-height:1.65}
+  .reason{color:var(--tx2);font-style:italic;border-left:2px solid #3a4358;padding-left:9px;margin-bottom:8px}
+  .empty{text-align:center;color:var(--tx2);padding:24px 0 16px}
+  .badge{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11px;
+    border:1px solid var(--line);color:var(--tx2)}
+  .sect-gap{display:grid;gap:20px;align-content:start}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">W</div>
+  <h1>WorkBuddy 控制台</h1>
+  <div class="chips">
+    <span class="chip"><i id="d-api" class="dot"></i><span id="t-api">检测中…</span></span>
+    <span class="chip"><span id="t-pool"></span></span>
+  </div>
+  <span class="grow"></span>
+  <button id="btn-reload" class="small">刷新</button>
+  <button id="btn-restart" class="small">重启网关服务</button>
+</header>
+
+<main>
+  <!-- 左列：总览 -->
+  <div class="sect-gap">
+    <section class="card">
+      <h2><span class="ico">👥</span>账号池
+        <span class="act">
+          <span class="muted" id="acct-fresh"></span>
+          <button class="small" id="btn-signin-all">全部签到</button>
+          <button class="small" id="btn-credits">刷新</button>
+        </span></h2>
+      <div class="tiles">
+        <div class="tile"><b id="s-remain">-</b><span>剩余积分</span></div>
+        <div class="tile"><b id="s-size">-</b><span>总额度</span></div>
+        <div class="tile"><b id="s-health">-</b><span>健康账号</span></div>
+        <div class="tile" id="tile-due"><b id="s-due">-</b><span>7 天内到期</span></div>
+      </div>
+      <div id="acct-err"></div>
+      <div class="acards" id="acards"></div>
+      <div class="muted" id="due-hint" style="margin-top:10px;display:none">
+        临期积分到期即作废——优先消耗高亮账号的额度。排序按最近到期优先。
+      </div>
+    </section>
+
+    <section class="card">
+      <h2><span class="ico">📅</span>签到记录（30 天）</h2>
+      <div class="heat" id="heat"></div>
+      <div id="checkin-entries" style="margin-top:12px"></div>
+    </section>
+  </div>
+
+  <!-- 右列：操作 -->
+  <div class="sect-gap">
+    <section class="card">
+      <h2><span class="ico">➕</span>添加账号</h2>
+      <div class="muted" style="margin-bottom:12px">
+        生成一次性授权链接，在浏览器中完成 CodeBuddy 登录即可自动入池。多账号请逐个添加，建议使用无痕窗口。
+      </div>
+      <div class="row">
+        <button class="primary" id="btn-login">生成授权链接</button>
+        <button id="btn-login-done" style="display:none">我已完成登录，手动认领</button>
+      </div>
+      <div class="muted" id="login-state" style="margin-top:8px"></div>
+      <div class="loginbox" id="login-box">
+        <div class="muted" style="margin-bottom:7px">授权链接（15 分钟内有效）：</div>
+        <div class="row">
+          <code id="login-url" style="flex:1"></code>
+          <button class="small" id="btn-login-open">打开</button>
+          <button class="small" id="btn-login-copy">复制</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2><span class="ico">🔌</span>接入信息</h2>
+      <div class="kv">
+        <span class="k">Base URL</span>
+        <span class="row"><code id="c-url">-</code>
+          <button class="small" data-copy="c-url">复制</button></span>
+        <span class="k">API Key</span>
+        <span class="row"><code id="c-key">-</code>
+          <button class="small" id="btn-key-eye">显示</button>
+          <button class="small" data-copy="c-key">复制</button></span>
+        <span class="k">模型</span>
+        <span class="row" id="c-models"></span>
+      </div>
+      <div class="muted" style="margin-top:10px">把以上信息填入任意 OpenAI 兼容客户端即可直连。</div>
+    </section>
+
+    <section class="card">
+      <h2><span class="ico">💬</span>对话测试</h2>
+      <div class="row" style="margin-bottom:10px">
+        <select id="m-sel" style="flex:1;min-width:170px"></select>
+        <label class="muted" style="display:flex;gap:5px;align-items:center">
+          <input type="checkbox" id="m-stream" checked style="width:auto">流式
+        </label>
+      </div>
+      <textarea id="m-in" placeholder="输入一条消息测试账号池…（⌘/Ctrl+Enter 发送）"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button class="primary" id="btn-send">发送</button>
+        <button class="small" id="btn-clear">清空结果</button>
+        <span class="grow"></span>
+        <span class="muted num" id="m-meta"></span>
+      </div>
+      <div class="out" id="m-out"><span class="muted">回复会显示在这里。</span></div>
+    </section>
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+let KEY_SHOWN = false, KEY_RAW = "", MODELS = [];
+let ACCTS = [], EXP = {}, HEALTH = {};
+
+function toast(msg, kind = "") {
+  const el = document.createElement("div");
+  el.className = "toast " + kind; el.textContent = msg;
+  $("#toast").appendChild(el);
+  setTimeout(() => el.remove(), 4200);
+}
+async function api(path, opt) {
+  const r = await fetch(path, opt);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.ok === false) throw new Error(j.error || ("HTTP " + r.status));
+  return j;
+}
+function esc(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
+
+/* ---------- 数据加载 ---------- */
+async function loadHealth() {
+  try {
+    const h = await api("/health");
+    const up = !!h.wb2api?.up;
+    $("#d-api").className = "dot " + (up ? "ok" : "bad");
+    $("#t-api").textContent = up ? `网关运行中 · :${h.wb2api.port}` : "网关未运行";
+    HEALTH = {};
+    const st = h.wb2api?.status || {};
+    for (const a of st.accounts || []) HEALTH[a.uid] = a;
+    $("#t-pool").textContent = `账号 ${h.auth_count}` +
+      (st.total != null ? ` · 健康 ${st.healthy ?? 0}/${st.total}` : "");
+    renderAccounts();
+  } catch (e) {
+    $("#d-api").className = "dot bad";
+    $("#t-api").textContent = "助手未响应";
+  }
+}
+
+async function loadAccounts() {
+  try {
+    const d = await api("/accounts");
+    ACCTS = d.accounts || [];
+    $("#acct-err").innerHTML = d.credit_error
+      ? `<div class="num" style="color:var(--bad);margin-top:8px">积分查询失败：${esc(d.credit_error)}</div>` : "";
+    const t = d.total || {};
+    $("#s-remain").textContent = fmtK(t.remain);
+    $("#s-size").textContent = fmtK(t.size);
+    renderAccounts();
+  } catch (e) { toast("账号加载失败：" + e.message, "err"); }
+}
+
+async function loadExpiries(fresh) {
+  $("#acct-fresh").textContent = "到期巡检中…";
+  try {
+    const d = await api("/expiries" + (fresh ? "?fresh=1" : ""));
+    EXP = d.accounts || {};
+    const ts = d.fetched_at ? new Date(d.fetched_at * 1000) : null;
+    $("#acct-fresh").textContent = ts
+      ? `到期巡检 ${d.cached ? "缓存" : "更新"} ${String(ts.getHours()).padStart(2,"0")}:${String(ts.getMinutes()).padStart(2,"0")}` : "";
+  } catch (e) {
+    EXP = {};
+    $("#acct-fresh").textContent = "";
+    $("#acct-err").insertAdjacentHTML("beforeend",
+      `<div class="num" style="color:var(--warn)">到期查询失败：${esc(e.message)}</div>`);
+  }
+  renderAccounts();
+}
+
+function fmtK(n) { if (n == null) return "-"; n = +n; return n >= 10000 ? (n/10000).toFixed(1) + "万" : String(n); }
+
+/* ---------- 渲染 ---------- */
+function dueInfo(uid) {
+  const e = EXP[uid];
+  if (!e || !e.next_expire) return null;
+  const t = new Date(e.next_expire);
+  if (isNaN(t)) return null;
+  const days = Math.ceil((t - Date.now()) / 86400000);
+  return { ts: +t, days, text: `${t.getMonth()+1}-${String(t.getDate()).padStart(2,"0")}` };
+}
+
+function renderAccounts() {
+  // 排序：最近到期优先（无到期信息排最后），同日按剩余多者在前
+  const rows = ACCTS.map(a => {
+    const due = dueInfo(a.uid);
+    return { a, due };
+  }).sort((x, y) => {
+    const tx = x.due ? x.due.ts : Infinity, ty = y.due ? y.due.ts : Infinity;
+    return (tx - ty) || ((y.a.remain ?? 0) - (x.a.remain ?? 0));
+  });
+  const nDue = rows.filter(r => r.due && r.due.days <= 7).length;
+  $("#s-due").textContent = nDue;
+  $("#tile-due").classList.toggle("hot", nDue > 0);
+  $("#due-hint").style.display = nDue ? "" : "none";
+  const st = Object.values(HEALTH);
+  const healthy = st.filter(s => !s.cooling && !s.disabled).length;
+  $("#s-health").textContent = st.length ? `${healthy}/${st.length}` : `${rows.length}`;
+
+  if (!rows.length) {
+    $("#acards").innerHTML = `<div class="empty" style="grid-column:1/-1">还没有账号，在右侧「添加账号」完成授权。</div>`;
+    return;
+  }
+  $("#acards").innerHTML = rows.map(({ a, due }) => {
+    const h = HEALTH[a.uid] || {};
+    let badge = `<span class="stbadge ok">健康</span>`;
+    const breakerOn = (h.breaker_fails || 0) > 0 && h.breaker_until && h.breaker_until > "0002-01-01";
+    if (h.disabled) badge = `<span class="stbadge bad">已禁用</span>`;
+    else if (breakerOn) badge = `<span class="stbadge bad">熔断</span>`;
+    else if (h.cooling) badge = `<span class="stbadge warn">冷却</span>`;
+    if (h.in_flight > 0) badge = `<span class="stbadge warn">在途 ${h.in_flight}</span>` + badge;
+    const pct = a.pct ?? 0;
+    const dueTag = due
+      ? (due.days <= 3 ? `<span class="tag bad">⏳ ${due.text} · 剩 ${Math.max(due.days,0)} 天</span>`
+        : due.days <= 7 ? `<span class="tag warn">⏳ ${due.text} · 剩 ${due.days} 天</span>`
+        : `<span class="tag">到期 ${due.text}</span>`)
+      : `<span class="tag">到期未知</span>`;
+    const packs = (EXP[a.uid]?.packages || []);
+    const packRows = packs.map(p => {
+      const dt = p.end ? new Date(p.end) : null;
+      return `<div class="prow"><span>${esc(p.name || "套餐")}</span>
+        <span><b>${p.remain}</b>/${p.size}${dt ? ` · ${dt.getMonth()+1}-${String(dt.getDate()).padStart(2,"0")}` : ""}</span></div>`;
+    }).join("");
+    return `<div class="acct ${due && due.days<=3 ? "due3" : due && due.days<=7 ? "due7" : ""}">
+      <div class="top">
+        <div class="avatar">${esc((a.nickname || a.uid || "?").slice(0, 2))}</div>
+        <div><div class="nick">${esc(a.nickname || "未命名")}</div>
+             <div class="uid8">${esc((a.uid || "").slice(0, 8))}${h.realm ? " · " + esc(h.realm) : ""}</div></div>
+        ${badge}
+      </div>
+      <div class="cr"><span class="big">${a.remain != null ? a.remain : "-"}</span>
+        <span class="pct">${a.size ? a.size + " 总额度" : ""} ${pct ? pct + "%" : ""}</span></div>
+      <div class="bar ${pct < 20 ? "low" : ""}"><i style="width:${Math.min(pct,100)}%"></i></div>
+      <div class="due">${dueTag}
+        <span class="tag">${packs.length} 个套餐</span>
+        ${h.success_count ? `<span class="tag">成功 ${h.success_count}</span>` : ""}
+      </div>
+      ${packs.length ? `<details class="pk"><summary>套餐明细</summary>${packRows}</details>` : ""}
+      <div class="foot">
+        <span class="scount">${a.expires_at ? "Token 至 " + new Date(a.expires_at*1000).toLocaleDateString("zh-CN") : ""}</span>
+        <button class="small" data-checkin="${esc(a.uid)}">签到</button>
+      </div>
+      ${a.credit_error ? `<div class="num" style="color:var(--bad);margin-top:6px">${esc(a.credit_error)}</div>` : ""}
+    </div>`;
+  }).join("");
+  $$("[data-checkin]").forEach(b => b.onclick = () => checkin(b));
+}
+
+/* ---------- 签到 ---------- */
+async function checkin(btn, quiet) {
+  const uid = btn.dataset.checkin;
+  btn.disabled = true; btn.textContent = "签到中…";
+  try {
+    const r = await api(`/accounts/${encodeURIComponent(uid)}/checkin`, { method: "POST" });
+    if (!quiet) toast(r.ok ? "签到完成" : "签到失败：" + (r.output || "").slice(-80), r.ok ? "ok" : "err");
+    return r.ok;
+  } catch (e) { if (!quiet) toast("签到失败：" + e.message, "err"); return false; }
+  finally { btn.disabled = false; btn.textContent = "签到"; }
+}
+
+async function loadCheckinLog() {
+  try {
+    const d = await api("/checkin-log");
+    const days = [];
+    const now = new Date();
+    for (let i = 29; i >= 0; i--) {
+      const t = new Date(now - i * 86400000);
+      const key = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,"0")}-${String(t.getDate()).padStart(2,"0")}`;
+      days.push({ key, info: (d.by_day || {})[key] });
+    }
+    $("#heat").innerHTML = days.map(x =>
+      `<i class="cell ${!x.info ? "" : x.info.fail ? (x.info.ok ? "mix" : "fail") : "ok"}" title="${x.key}${x.info ? ` 成功 ${x.info.ok} · 失败 ${x.info.fail}` : ""}"></i>`).join("");
+    $("#checkin-entries").innerHTML = (d.entries || []).length
+      ? d.entries.slice(0, 8).map(e => `<div class="logline">
+          <span class="num muted">${new Date(e.ts*1000).toLocaleString("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"})}</span>
+          <span>${esc(e.nickname || (e.uid || "").slice(0,8))}</span>
+          <span class="${e.ok ? "tag-ok" : "tag-bad"}">${e.ok ? "✓ 成功" : "✗ 失败"}</span>
+          <span class="muted" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((e.output||"").split("\n").find(l=>/total=|already|OK|FAIL/.test(l)) || "")}</span>
+        </div>`).join("")
+      : `<div class="muted">还没有签到记录。定时任务每天 09:00 / 21:00 会自动签到，这里记录页面上发起的手动签到。</div>`;
+  } catch (e) { /* 静默 */ }
+}
+
+async function restartApi() {
+  if (!confirm("确定重启网关服务？进行中的请求会中断。")) return;
+  toast("正在重启…");
+  $("#btn-restart").disabled = true;
+  try {
+    const r = await api("/wb2api/restart", { method: "POST" });
+    toast(r.ok ? "服务已重启" : "重启失败：" + (r.error || ""), r.ok ? "ok" : "err");
+  } catch (e) { toast("重启失败：" + e.message, "err"); }
+  finally { $("#btn-restart").disabled = false; refreshAll(); }
+}
+
+/* ---------- 添加账号（OAuth） ---------- */
+let loginTimer = null;
+async function startLogin() {
+  $("#btn-login").disabled = true;
+  try {
+    const r = await api("/login/start", { method: "POST" });
+    if (!r.ok) throw new Error(r.error || "生成失败");
+    $("#login-box").style.display = "block";
+    $("#login-url").textContent = r.url;
+    $("#btn-login-open").onclick = () => window.open(r.url, "_blank");
+    $("#btn-login-copy").onclick = () => copyText(r.url);
+    $("#btn-login-done").style.display = "";
+    $("#login-state").textContent = r.reused ? "已有进行中的登录，继续等待…" : "等待浏览器授权…";
+    pollLogin();
+  } catch (e) { toast("生成授权链接失败：" + e.message, "err"); }
+  finally { $("#btn-login").disabled = false; }
+}
+function pollLogin() {
+  clearInterval(loginTimer);
+  loginTimer = setInterval(async () => {
+    try {
+      const s = await api("/login/status");
+      if (!s.pending) {
+        clearInterval(loginTimer); loginTimer = null;
+        $("#btn-login-done").style.display = "none";
+        if (s.result) {
+          $("#login-state").innerHTML = `<span class="tag-ok">登录成功：${esc(s.result.nickname || s.result.uid)}，已入池并自动重启服务</span>`;
+          toast("账号已入池", "ok"); refreshAll();
+        } else {
+          $("#login-state").textContent = s.error || "登录未完成";
+          toast(s.error || "登录未完成", "err");
+        }
+      } else {
+        const mins = Math.max(0, Math.round((900 - (Date.now() / 1000 - s.started_at)) / 60));
+        $("#login-state").textContent = `等待浏览器授权…（约 ${mins} 分钟后失效）`;
+      }
+    } catch (e) { /* 瞬断不打断守望 */ }
+  }, 4000);
+}
+async function manualClaim() {
+  toast("正在认领 token…");
+  try {
+    const r = await api("/login/complete", { method: "POST" });
+    if (!r.ok) throw new Error(r.error || "认领失败");
+    toast(`登录成功：${r.nickname || r.uid}`, "ok");
+    clearInterval(loginTimer); loginTimer = null;
+    $("#login-box").style.display = "none";
+    $("#btn-login-done").style.display = "none";
+    $("#login-state").textContent = "";
+    refreshAll();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+/* ---------- 接入信息 ---------- */
+async function loadConnection() {
+  try {
+    const d = await api("/connection");
+    $("#c-url").textContent = d.base_url;
+    KEY_RAW = d.api_key || ""; renderKey();
+    MODELS = d.models || [];
+    $("#c-models").innerHTML = MODELS.map(m =>
+      `<span class="badge" style="cursor:pointer" title="点击复制">${esc(m)}</span>`).join(" ");
+    $$("#c-models .badge").forEach((b, i) => b.onclick = () => copyText(MODELS[i]));
+  } catch (e) { /* 无妨 */ }
+}
+function renderKey() {
+  $("#c-key").textContent = !KEY_RAW ? "-" :
+    (KEY_SHOWN ? KEY_RAW : KEY_RAW.slice(0, 8) + "•".repeat(12) + KEY_RAW.slice(-4));
+  $("#btn-key-eye").textContent = KEY_SHOWN ? "隐藏" : "显示";
+}
+
+/* ---------- 对话测试 ---------- */
+async function loadModels() {
+  try {
+    const r = await fetch("/upstream/models");
+    const j = await r.json();
+    const ids = (j.data || []).map(m => m.id).filter(Boolean);
+    if (ids.length) MODELS = [...new Set([...ids, ...MODELS])];
+  } catch (e) { /* 网关没起时用默认模型 */ }
+  $("#m-sel").innerHTML = MODELS.map(m => `<option>${esc(m)}</option>`).join("");
+}
+async function sendChat() {
+  const text = $("#m-in").value.trim();
+  if (!text) { toast("先输入内容"); return; }
+  const model = $("#m-sel").value || MODELS[0] || "cn:auto";
+  const stream = $("#m-stream").checked;
+  $("#btn-send").disabled = true;
+  const out = $("#m-out"); out.innerHTML = `<span class="muted">请求中…</span>`;
+  const t0 = performance.now();
+  try {
+    const resp = await fetch("/upstream/chat", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, messages: [{ role: "user", content: text }], stream }),
+    });
+    if (!resp.ok) {
+      let msg = `HTTP ${resp.status}`;
+      try { const j = await resp.json(); msg = j.error?.message || j.error || j.message || msg;
+            if (typeof msg !== "string") msg = JSON.stringify(msg); } catch (e) {}
+      out.innerHTML = `<span style="color:var(--bad)">请求失败：${esc(String(msg))}</span>`;
+      return;
+    }
+    out.innerHTML = "";
+    let reasonDiv = null, ansDiv = null, answer = "";
+    const ensure = () => {
+      if (!reasonDiv) { reasonDiv = document.createElement("div"); reasonDiv.className = "reason";
+                        reasonDiv.style.display = "none"; out.appendChild(reasonDiv); }
+      if (!ansDiv) { ansDiv = document.createElement("div"); out.appendChild(ansDiv); }
+    };
+    if (stream) {
+      const reader = resp.body.getReader(); const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split("\n"); buf = lines.pop();
+        for (const line of lines) {
+          const m = line.match(/^data:\s*(.*)$/); if (!m) continue;
+          const payload = m[1].trim(); if (!payload || payload === "[DONE]") continue;
+          let j; try { j = JSON.parse(payload); } catch (e) { continue; }
+          const d = j.choices?.[0]?.delta || {};
+          ensure();
+          if (d.reasoning_content) { reasonDiv.style.display = ""; reasonDiv.textContent += d.reasoning_content; }
+          if (d.content) { ansDiv.textContent += d.content; answer += d.content; }
+          out.scrollTop = out.scrollHeight;
+        }
+      }
+      if (!answer && !reasonDiv?.textContent) out.innerHTML = `<span class="muted">上游无内容返回。</span>`;
+    } else {
+      const j = await resp.json();
+      const msg = j.choices?.[0]?.message || {};
+      ensure();
+      if (msg.reasoning_content) { reasonDiv.style.display = ""; reasonDiv.textContent = msg.reasoning_content; }
+      ansDiv.textContent = msg.content || "（空回复）";
+    }
+    $("#m-meta").textContent = `${model} · ${((performance.now() - t0) / 1000).toFixed(1)}s`;
+    loadAccounts();   // 消耗后余额刷新
+  } catch (e) {
+    out.innerHTML = `<span style="color:var(--bad)">请求异常：${esc(e.message)}</span>`;
+  } finally { $("#btn-send").disabled = false; }
+}
+
+/* ---------- 复制 ---------- */
+async function copyText(t) {
+  try { await navigator.clipboard.writeText(t); toast("已复制", "ok"); }
+  catch (e) {
+    const ta = document.createElement("textarea"); ta.value = t; document.body.appendChild(ta);
+    ta.select(); document.execCommand("copy"); ta.remove(); toast("已复制", "ok");
+  }
+}
+
+async function refreshAll() {
+  await Promise.all([loadHealth(), loadAccounts(), loadExpiries(false), loadCheckinLog()]);
+}
+
+$("#btn-reload").onclick = () => { refreshAll(); loadModels(); toast("已刷新"); };
+$("#btn-restart").onclick = restartApi;
+$("#btn-credits").onclick = () => { loadAccounts(); loadExpiries(true); };
+$("#btn-signin-all").onclick = async () => {
+  const btns = $$("[data-checkin]");
+  if (!btns.length) { toast("没有可签到的账号"); return; }
+  toast("正在为全部账号签到…");
+  let okN = 0;
+  for (const b of btns) if (await checkin(b, true)) okN++;
+  toast(`签到完成：${okN}/${btns.length}`, okN === btns.length ? "ok" : "");
+  refreshAll();
+};
+$("#btn-login").onclick = startLogin;
+$("#btn-login-done").onclick = manualClaim;
+$("#btn-key-eye").onclick = () => { KEY_SHOWN = !KEY_SHOWN; renderKey(); };
+$$("[data-copy]").forEach(b => b.onclick = () => copyText($("#" + b.dataset.copy).textContent));
+$("#btn-send").onclick = sendChat;
+$("#btn-clear").onclick = () => { $("#m-out").innerHTML = `<span class="muted">回复会显示在这里。</span>`;
+                                  $("#m-meta").textContent = ""; };
+$("#m-in").addEventListener("keydown", e => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendChat(); }
+});
+
+(async () => {
+  await Promise.all([loadHealth(), loadAccounts(), loadConnection(), loadCheckinLog()]);
+  loadExpiries(false);
+  await loadModels();
+  try { const s = await api("/login/status"); if (s.pending && s.url) {
+    $("#login-box").style.display = "block"; $("#login-url").textContent = s.url;
+    $("#btn-login-open").onclick = () => window.open(s.url, "_blank");
+    $("#btn-login-copy").onclick = () => copyText(s.url);
+    $("#btn-login-done").style.display = ""; $("#login-state").textContent = "已有进行中的登录…";
+    pollLogin();
+  } } catch (e) {}
+  setInterval(loadHealth, 60000);
+})();
+</script>
+</body>
+</html>
