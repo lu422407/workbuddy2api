@@ -261,33 +261,46 @@ def restart_wb2api():
     return {"ok": True, "status": wb2api_status()}
 
 
-def login_start():
+def login_start(realm: str = "cn"):
     """生成授权链接并**在后台守望**直到登录完成。
 
+    realm："cn"（copilot.tencent.com）/ "global"（www.workbuddy.ai）。
+    login 二进制的 url 与 poll 必须同域（state 文件带 realm 校验），所以 realm
+    随守望状态一起记住，守望线程与手动认领都复用它，绝不中途换域。
+    state 文件全局唯一（login url 每次覆盖）→ 已有另一域的进行中登录时直接挡下，
+    等它完成或过期，避免互相踩掉 state。
+
     多账号场景的两个硬约束决定了这个设计：
-    - `login.exe poll` 是单次 GET，不是轮询；
-    - `login.exe url` 每次都覆盖它硬编码的 state 文件。
+    - `login poll` 是单次 GET，不是轮询；
+    - `login url` 每次都覆盖硬编码的 state 文件。
     所以"点一次按钮 → 用户慢慢在无痕窗口里登录 → 页面自动认领"是唯一不撞车的形态：
     守望线程挂在生成出来的那一个 state 上重试，期间不会再生成新 state。
     """
     global _login
+    if realm not in ("cn", "global"):
+        return {"ok": False, "error": f"未知 realm: {realm}"}
     with _login_lock:
         cur = _login
         if cur.get("pending") and time.time() - cur.get("started_at", 0) < LOGIN_TTL:
+            if cur.get("realm", "cn") != realm:
+                return {"ok": False, "error": "已有另一版本（%s）的登录进行中；"
+                            "登录状态文件全局唯一，请先完成它或等其过期（15 分钟）"
+                            % ("国际版" if cur.get("realm") == "global" else "国内版")}
             # 已有进行中的登录：复用它的链接，绝不覆盖 state
-            return {"ok": True, "url": cur["url"], "pending": True, "reused": True}
-    code, out, err = _run(LOGIN, "url", timeout=45)
+            return {"ok": True, "url": cur["url"], "pending": True, "reused": True,
+                    "realm": realm}
+    code, out, err = _run(LOGIN, f"--realm={realm}", "url", timeout=45)
     if code != 0 and not out.strip():
         return {"ok": False, "error": (err or "生成授权链接失败").strip()}
     url = out.strip()
     with _login_lock:
         _login = {"pending": True, "url": url, "started_at": time.time(),
-                  "result": None, "error": ""}
-    threading.Thread(target=_watch_login, args=(url,), daemon=True).start()
-    return {"ok": True, "url": url, "pending": True, "reused": False}
+                  "result": None, "error": "", "realm": realm}
+    threading.Thread(target=_watch_login, args=(url, realm), daemon=True).start()
+    return {"ok": True, "url": url, "pending": True, "reused": False, "realm": realm}
 
 
-def _watch_login(expected_url: str) -> None:
+def _watch_login(expected_url: str, realm: str = "cn") -> None:
     global _login
     deadline = time.time() + LOGIN_TTL
     while time.time() < deadline:
@@ -295,7 +308,7 @@ def _watch_login(expected_url: str) -> None:
         with _login_lock:
             if not _login.get("pending") or _login.get("url") != expected_url:
                 return  # 被新的登录流程取代
-        code, out, err = _run(LOGIN, "poll", timeout=60)
+        code, out, err = _run(LOGIN, f"--realm={realm}", "poll", timeout=60)
         if code == 0 and out.strip().startswith("{"):
             try:
                 doc = json.loads(out.strip())
@@ -308,10 +321,13 @@ def _watch_login(expected_url: str) -> None:
             auth = {
                 "account": {"uid": uid, "enterpriseId": doc.get("enterprise_id", ""),
                             "nickname": doc.get("nickname", "")},
+                # realm 恒写（login poll 输出保证非空）：global 账号若只靠 domain
+                # 回落推断，域判定会晚一拍；显式落盘与 login.sh 官方流程对齐。
                 "auth": {"accessToken": doc.get("access_token", ""),
                          "refreshToken": doc.get("refresh_token", ""),
                          "expiresAt": int(time.time()) + expires_in,
-                         "domain": doc.get("domain", "")},
+                         "domain": doc.get("domain", ""),
+                         "realm": doc.get("realm") or realm},
             }
             os.makedirs(AUTH_DIR, exist_ok=True)
             path = os.path.join(AUTH_DIR, f"workbuddy-{uid}.json")
@@ -323,27 +339,34 @@ def _watch_login(expected_url: str) -> None:
                 _login = {"pending": False, "url": expected_url,
                           "started_at": time.time(),
                           "result": {"uid": uid, "nickname": doc.get("nickname", ""),
-                                     "updated": existed, "restart": restart},
-                          "error": ""}
+                                     "updated": existed, "restart": restart,
+                                     "realm": auth["auth"]["realm"]},
+                          "error": "", "realm": realm}
             return
     with _login_lock:
         if _login.get("pending") and _login.get("url") == expected_url:
             _login = {"pending": False, "url": expected_url,
                       "started_at": time.time(), "result": None,
-                      "error": "超时未完成登录（链接已失效，请重新生成）"}
+                      "error": "超时未完成登录（链接已失效，请重新生成）", "realm": realm}
 
 
 def login_status():
     with _login_lock:
         cur = dict(_login)
+    cur.setdefault("realm", "cn")
     cur["ok"] = True
     cur["accounts"] = len(read_auths())
     return cur
 
 
 def login_complete():
-    """手动触发：用户点"我已登录"时的兜底（守望线程失败时仍可自救）。"""
-    code, out, err = _run(LOGIN, "poll", timeout=60)
+    """手动触发：用户点"我已登录"时的兜底（守望线程失败时仍可自救）。
+
+    realm 取进行中登录记住的域（url 与 poll 必须同域，state 文件里也有校验）。
+    """
+    with _login_lock:
+        realm = _login.get("realm") or "cn"
+    code, out, err = _run(LOGIN, f"--realm={realm}", "poll", timeout=60)
     if code != 0:
         return {"ok": False, "error": (err or "获取 token 失败（登录可能还没完成）").strip()}
     try:
@@ -360,7 +383,8 @@ def login_complete():
         "auth": {"accessToken": doc.get("access_token", ""),
                  "refreshToken": doc.get("refresh_token", ""),
                  "expiresAt": int(time.time()) + expires_in,
-                 "domain": doc.get("domain", "")},
+                 "domain": doc.get("domain", ""),
+                 "realm": doc.get("realm") or realm},
     }
     os.makedirs(AUTH_DIR, exist_ok=True)
     path = os.path.join(AUTH_DIR, f"workbuddy-{uid}.json")
@@ -369,6 +393,7 @@ def login_complete():
         json.dump(auth, f, indent=1, ensure_ascii=False)
     restarted = restart_wb2api()
     return {"ok": True, "uid": uid, "nickname": auth["account"]["nickname"],
+            "realm": auth["auth"]["realm"],
             "updated": existed, "file": os.path.basename(path),
             "restart": restarted}
 
@@ -573,7 +598,14 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         try:
             if path == "/login/start":
-                self._send(200, login_start())
+                realm = "cn"
+                length = int(self.headers.get("Content-Length") or 0)
+                if length:
+                    try:
+                        realm = str(json.loads(self.rfile.read(length)).get("realm") or "cn").lower()
+                    except Exception:  # noqa: BLE001 — 坏 body 按默认 cn
+                        pass
+                self._send(200, login_start(realm))
             elif path == "/login/complete":
                 self._send(200, login_complete())
             elif path == "/wb2api/restart":
