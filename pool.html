@@ -70,6 +70,7 @@
     font-weight:700;font-size:13px;color:#fff;background:linear-gradient(135deg,var(--acc),var(--acc2))}
   .nick{font-weight:650;font-size:13.5px;line-height:1.25}
   .uid8{font-size:11px;color:var(--tx2);font-family:ui-monospace,monospace}
+  .uid8 .intl{color:var(--acc2);font-family:inherit}
   .stbadge{margin-left:auto;font-size:11px;padding:2px 9px;border-radius:99px;border:1px solid var(--line)}
   .stbadge.ok{color:var(--ok);border-color:rgba(47,214,138,.35);background:rgba(47,214,138,.07)}
   .stbadge.warn{color:var(--warn);border-color:rgba(255,180,84,.4);background:rgba(255,180,84,.08)}
@@ -353,6 +354,7 @@ function renderAccounts() {
   }
   $("#acards").innerHTML = rows.map(({ a, due }) => {
     const h = HEALTH[a.uid] || {};
+    const realmTx = h.realm === "global" ? "国际" : h.realm === "cn" ? "国内" : "";
     let badge = `<span class="stbadge ok">健康</span>`;
     const breakerOn = (h.breaker_fails || 0) > 0 && h.breaker_until && h.breaker_until > "0002-01-01";
     if (h.disabled) badge = `<span class="stbadge bad">已禁用</span>`;
@@ -375,7 +377,7 @@ function renderAccounts() {
       <div class="top">
         <div class="avatar">${esc((a.nickname || a.uid || "?").slice(0, 2))}</div>
         <div><div class="nick">${esc(a.nickname || "未命名")}</div>
-             <div class="uid8">${esc((a.uid || "").slice(0, 8))}${h.realm ? " · " + esc(h.realm) : ""}</div></div>
+             <div class="uid8">${esc((a.uid || "").slice(0, 8))}${realmTx ? ` · <span class="${h.realm === "global" ? "intl" : ""}">${realmTx}</span>` : ""}</div></div>
         ${badge}
       </div>
       <div class="cr"><span class="big">${a.remain != null ? a.remain : "-"}</span>
