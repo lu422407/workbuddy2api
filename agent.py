@@ -127,11 +127,16 @@ def accounts_view():
             "auth_dir": AUTH_DIR}
 
 
+STATIC_MODELS = ["deepseek-v4.1-flash", "deepseek-v4-flash"]
+
+
 def connection_view():
     """第三方工具（如 Deepseek-Harness-Desktop）接入 wb2api 所需的三件套。
 
-    值全部来自本目录 config.json，不发到任何地方 —— 该端点仅绑 127.0.0.1，
-    供本机浏览器上的账号池页面展示与复制。
+    base_url/api_key 来自本目录 config.json；模型清单**优先从上游取**：
+    调 wb2api 自己的 /v1/models（它内部已做 1h 缓存 + 失败回落静态表，
+    这里只是透传，不另设缓存）。取不到（服务没起/超时）才回退 STATIC_MODELS，
+    models_source 字段如实标注来源。该端点仅绑 127.0.0.1，不发到任何地方。
     """
     port, key = 7863, ""
     try:
@@ -143,9 +148,22 @@ def connection_view():
             port = int(listen.rsplit(":", 1)[1])
     except Exception:  # noqa: BLE001 — 读不到配置时给默认端口
         pass
+    models, source = list(STATIC_MODELS), "static"
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/v1/models",
+                                     headers={"Authorization": f"Bearer {key}"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            ids = [m.get("id") for m in (json.loads(r.read().decode()).get("data") or [])
+                   if m.get("id")]
+        if ids:
+            # 常用默认模型排前（页面徽章优先展示），其余按上游顺序
+            head = [m for m in ("cn:auto", "auto", *STATIC_MODELS) if m in ids]
+            models = head + [m for m in ids if m not in head]
+            source = "upstream"
+    except Exception:  # noqa: BLE001 — 上游不可达用静态表，不报错
+        pass
     return {"ok": True, "base_url": f"http://127.0.0.1:{port}/v1",
-            "api_key": key,
-            "models": ["deepseek-v4.1-flash", "deepseek-v4-flash"]}
+            "api_key": key, "models": models, "models_source": source}
 
 
 def wb2api_status():

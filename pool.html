@@ -237,7 +237,7 @@
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 let KEY_SHOWN = false, KEY_RAW = "", MODELS = [];
-let ACCTS = [], EXP = {}, HEALTH = {};
+let ACCTS = [], EXP = {}, HEALTH = {}, ACCTS_LOADED = false;
 
 function toast(msg, kind = "") {
   const el = document.createElement("div");
@@ -276,6 +276,7 @@ async function loadAccounts() {
   try {
     const d = await api("/accounts");
     ACCTS = d.accounts || [];
+    ACCTS_LOADED = true;
     $("#acct-err").innerHTML = d.credit_error
       ? `<div class="num" style="color:var(--bad);margin-top:8px">积分查询失败：${esc(d.credit_error)}</div>` : "";
     const t = d.total || {};
@@ -331,6 +332,10 @@ function renderAccounts() {
   const healthy = st.filter(s => !s.cooling && !s.disabled).length;
   $("#s-health").textContent = st.length ? `${healthy}/${st.length}` : `${rows.length}`;
 
+  if (!ACCTS_LOADED) {   // 积分查询要几秒，加载完成前不误导为「没有账号」
+    $("#acards").innerHTML = `<div class="empty" style="grid-column:1/-1">正在读取账号与积分…</div>`;
+    return;
+  }
   if (!rows.length) {
     $("#acards").innerHTML = `<div class="empty" style="grid-column:1/-1">还没有账号，在右侧「添加账号」完成授权。</div>`;
     return;
@@ -485,11 +490,23 @@ async function loadConnection() {
     const d = await api("/connection");
     $("#c-url").textContent = d.base_url;
     KEY_RAW = d.api_key || ""; renderKey();
-    MODELS = d.models || [];
-    $("#c-models").innerHTML = MODELS.map(m =>
-      `<span class="badge" style="cursor:pointer" title="点击复制">${esc(m)}</span>`).join(" ");
-    $$("#c-models .badge").forEach((b, i) => b.onclick = () => copyText(MODELS[i]));
+    MODELS = [...new Set([...(d.models || []), ...MODELS])];
+    renderModelBadges(d.models_source === "upstream");
   } catch (e) { /* 无妨 */ }
+}
+let MODELS_OPEN = false;
+function renderModelBadges(fromUpstream) {
+  const show = MODELS_OPEN ? MODELS : MODELS.slice(0, 6);
+  let html = show.map(m =>
+    `<span class="badge" style="cursor:pointer" title="点击复制">${esc(m)}</span>`).join(" ");
+  if (MODELS.length > 6)
+    html += ` <button class="small" id="btn-models-more">${MODELS_OPEN ? "收起" : `+${MODELS.length - 6} 更多`}</button>`;
+  html += ` <span class="muted" style="width:100%">${fromUpstream
+    ? "模型清单实时取自上游（1 小时缓存）" : "上游未连通，暂显常用模型"}</span>`;
+  $("#c-models").innerHTML = html;
+  $$("#c-models .badge").forEach(b => b.onclick = () => copyText(b.textContent));
+  const more = $("#btn-models-more");
+  if (more) more.onclick = () => { MODELS_OPEN = !MODELS_OPEN; renderModelBadges(fromUpstream); };
 }
 function renderKey() {
   $("#c-key").textContent = !KEY_RAW ? "-" :
