@@ -128,6 +128,10 @@
   .badge{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11px;
     border:1px solid var(--line);color:var(--tx2)}
   .sect-gap{display:grid;gap:20px;align-content:start}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+  .seg .seg-b{border:none;border-radius:0;background:transparent;color:var(--tx2);padding:5px 14px}
+  .seg .seg-b:hover{transform:none;background:rgba(124,92,255,.08)}
+  .seg .seg-b.active{background:linear-gradient(120deg,var(--acc),#5a3de8);color:#fff;font-weight:600}
 </style>
 </head>
 <body>
@@ -177,7 +181,14 @@
   <div class="sect-gap">
     <section class="card">
       <h2><span class="ico">➕</span>添加账号</h2>
-      <div class="muted" style="margin-bottom:12px">
+      <div class="row" style="margin-bottom:10px">
+        <span class="muted">登录版本</span>
+        <div class="seg" id="realm-seg">
+          <button class="small seg-b active" data-realm="cn">国内版</button>
+          <button class="small seg-b" data-realm="global">国际版</button>
+        </div>
+      </div>
+      <div class="muted" style="margin-bottom:12px" id="login-desc">
         生成一次性授权链接，在浏览器中完成 CodeBuddy 登录即可自动入池。多账号请逐个添加，建议使用无痕窗口。
       </div>
       <div class="row">
@@ -432,12 +443,22 @@ async function restartApi() {
 }
 
 /* ---------- 添加账号（OAuth） ---------- */
-let loginTimer = null;
+let loginTimer = null, REALM = "cn";
+function setRealm(r, syncServer) {
+  REALM = r;
+  $$("#realm-seg .seg-b").forEach(b => b.classList.toggle("active", b.dataset.realm === r));
+  $("#login-desc").textContent = r === "global"
+    ? "生成一次性授权链接，在浏览器中完成 WorkBuddy 国际版（workbuddy.ai）登录即可自动入池。登录状态全局唯一，一次只能进行一个域的登录。"
+    : "生成一次性授权链接，在浏览器中完成 CodeBuddy 登录即可自动入池。多账号请逐个添加，建议使用无痕窗口。";
+}
+$$("#realm-seg .seg-b").forEach(b => b.onclick = () => setRealm(b.dataset.realm));
 async function startLogin() {
   $("#btn-login").disabled = true;
   try {
-    const r = await api("/login/start", { method: "POST" });
+    const r = await api("/login/start", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ realm: REALM }) });
     if (!r.ok) throw new Error(r.error || "生成失败");
+    if (r.realm && r.realm !== REALM) setRealm(r.realm);
     $("#login-box").style.display = "block";
     $("#login-url").textContent = r.url;
     $("#btn-login-open").onclick = () => window.open(r.url, "_blank");
@@ -453,12 +474,14 @@ function pollLogin() {
   loginTimer = setInterval(async () => {
     try {
       const s = await api("/login/status");
+      if (s.realm && s.realm !== REALM && s.pending) setRealm(s.realm);
       if (!s.pending) {
         clearInterval(loginTimer); loginTimer = null;
         $("#btn-login-done").style.display = "none";
         if (s.result) {
-          $("#login-state").innerHTML = `<span class="tag-ok">登录成功：${esc(s.result.nickname || s.result.uid)}，已入池并自动重启服务</span>`;
-          toast("账号已入池", "ok"); refreshAll();
+          const rn = s.result.realm === "global" ? "国际版" : "国内版";
+          $("#login-state").innerHTML = `<span class="tag-ok">登录成功：${esc(s.result.nickname || s.result.uid)}（${rn}），已入池并自动重启服务</span>`;
+          toast(`账号已入池（${rn}）`, "ok"); refreshAll();
         } else {
           $("#login-state").textContent = s.error || "登录未完成";
           toast(s.error || "登录未完成", "err");
@@ -475,7 +498,7 @@ async function manualClaim() {
   try {
     const r = await api("/login/complete", { method: "POST" });
     if (!r.ok) throw new Error(r.error || "认领失败");
-    toast(`登录成功：${r.nickname || r.uid}`, "ok");
+    toast(`登录成功：${r.nickname || r.uid}（${r.realm === "global" ? "国际版" : "国内版"}）`, "ok");
     clearInterval(loginTimer); loginTimer = null;
     $("#login-box").style.display = "none";
     $("#btn-login-done").style.display = "none";
@@ -626,6 +649,7 @@ $("#m-in").addEventListener("keydown", e => {
   loadExpiries(false);
   await loadModels();
   try { const s = await api("/login/status"); if (s.pending && s.url) {
+    setRealm(s.realm || "cn");
     $("#login-box").style.display = "block"; $("#login-url").textContent = s.url;
     $("#btn-login-open").onclick = () => window.open(s.url, "_blank");
     $("#btn-login-copy").onclick = () => copyText(s.url);
