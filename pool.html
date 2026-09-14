@@ -393,7 +393,9 @@ function renderAccounts() {
       ${packs.length ? `<details class="pk"><summary>套餐明细</summary>${packRows}</details>` : ""}
       <div class="foot">
         <span class="scount">${a.expires_at ? "Token 至 " + new Date(a.expires_at*1000).toLocaleDateString("zh-CN") : ""}</span>
-        <button class="small" data-checkin="${esc(a.uid)}">签到</button>
+        ${h.realm === "global"
+          ? `<span class="badge" title="国际版无签到体系，登录自动送分">登录送分</span>`
+          : `<button class="small" data-checkin="${esc(a.uid)}">签到</button>`}
       </div>
       ${a.credit_error ? `<div class="num" style="color:var(--bad);margin-top:6px">${esc(a.credit_error)}</div>` : ""}
     </div>`;
