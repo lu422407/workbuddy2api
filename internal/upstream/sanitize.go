@@ -29,10 +29,6 @@ var sanitizeHdrRe = regexp.MustCompile(`(?i)x-anthropic-billing-header:[^;\n]*;?
 // 证实 assistant 消息里反引号引用裸键名即触发 11128，而剥离层要求冒号、对裸串无效。
 // 键值形态被整段删除后，残留的裸键名做最小缩写（header→hdr）：破坏逐字匹配、
 // 语义不变、保留可读性。大小写不敏感，覆盖 X-Anthropic-... 变体。
-//
-// 注意该正则不要求冒号，是 sanitizeHdrRe 的超集——hasFingerprint 与 sanitizeText
-// 中两者并用：先删键值形态（sanitizeHdrRe），再缩写残留裸键名（本正则），
-// 替换语义不同（整段删除 vs 最小缩写），不可合并为一个正则。
 var sanitizeBareHdrRe = regexp.MustCompile(`(?i)x-anthropic-billing-header`)
 
 // sanitizeKvRe 剥离层：尾随裸键值（cc_xxx=...;）循环清理。
@@ -105,14 +101,13 @@ func sanitizeText(text string) string {
 // header 键名有大小写变体（X-Anthropic-...）且可能以裸键名形态出现（无冒号），
 // Contains 大小写敏感、sanitizeHdrRe 要求冒号——两者都会漏掉「混合大小写 + 裸键名」，
 // 必须再用不要求冒号的 (?i) 正则兜底（sanitizeBareHdrRe），否则整条净化被跳过。
-// sanitizeBareHdrRe 不要求冒号，是 sanitizeHdrRe 的超集，故无需再单独匹配后者。
 func hasFingerprint(text string) bool {
 	for _, f := range sanitizeFeatures {
 		if strings.Contains(text, f) {
 			return true
 		}
 	}
-	return sanitizeBareHdrRe.MatchString(text)
+	return sanitizeBareHdrRe.MatchString(text) || sanitizeHdrRe.MatchString(text)
 }
 
 // sanitizeContent 兼容字符串与多模态数组；只动 text part，image 等 part 不动。
@@ -176,7 +171,7 @@ func sanitizeToolCalls(v any) bool {
 	return changed
 }
 
-// sanitizeMessages 净化 messages 中的 content、reasoning_content 与 tool_calls；任一命中返回 true。
+// sanitizeMessages 净化 messages 中的 content 与 tool_calls；任一命中返回 true。
 func sanitizeMessages(messages []any) bool {
 	changed := false
 	for _, msg := range messages {
@@ -192,16 +187,15 @@ func sanitizeMessages(messages []any) bool {
 				changed = true
 			}
 		}
-		// reasoning_content（思维链回填字段，见 thinking.go/sse.go）实测同样
-		// 携带指纹，与 content 同等净化。string 形态直接走 sanitizeText。
-		if rc, ok := m["reasoning_content"].(string); ok {
-			if s := sanitizeText(rc); s != rc {
-				m["reasoning_content"] = s
+		if tc, ok := m["tool_calls"]; ok {
+			if sanitizeToolCalls(tc) {
 				changed = true
 			}
 		}
-		if tc, ok := m["tool_calls"]; ok {
-			if sanitizeToolCalls(tc) {
+		// reasoning_content（思维链回填字段）实测同样携带指纹，与 content 同等净化。
+		if rc, ok := m["reasoning_content"].(string); ok {
+			if s := sanitizeText(rc); s != rc {
+				m["reasoning_content"] = s
 				changed = true
 			}
 		}
