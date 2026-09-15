@@ -144,13 +144,22 @@ def lan_ip():
         s.close()
 
 
-def connection_view():
+def _lan_url(listen, port):
+    """局域网接入 URL：仅 listen 绑了非回环（0.0.0.0 / 裸 :port）时给出。"""
+    exposed = (listen == "" or listen.startswith(":")
+               or listen.startswith("0.0.0.0") or listen.startswith("*"))
+    ip = lan_ip() if exposed else ""
+    return f"http://{ip}:{port}/v1" if ip else ""
+
+
+def connection_view(fetch: bool = False):
     """第三方工具（如 Deepseek-Harness-Desktop）接入 wb2api 所需的三件套。
 
-    base_url/api_key 来自本目录 config.json；模型清单**优先从上游取**：
-    调 wb2api 自己的 /v1/models（它内部已做 1h 缓存 + 失败回落静态表，
-    这里只是透传，不另设缓存）。取不到（服务没起/超时）才回退 STATIC_MODELS，
-    models_source 字段如实标注来源。该端点仅绑 127.0.0.1，不发到任何地方。
+    base_url/api_key 来自本目录 config.json。模型清单**默认不自动拉上游**：
+    fetch=False 只返回 STATIC_MODELS + source="manual"（页面显示「获取上游模型」按钮），
+    由用户点按钮触发 fetch=True 才调 wb2api 的 /v1/models（wb2api 内部已做 1h 缓存 +
+    失败回落静态表，这里只是透传）。取不到回退静态 + source="static"（上游未连通）。
+    该端点仅绑 127.0.0.1，不发到任何地方。
     """
     port, key, listen = 7863, "", ""
     try:
@@ -162,6 +171,10 @@ def connection_view():
             port = int(listen.rsplit(":", 1)[1])
     except Exception:  # noqa: BLE001 — 读不到配置时给默认端口
         pass
+    if not fetch:
+        return {"ok": True, "base_url": f"http://127.0.0.1:{port}/v1",
+                "lan_url": _lan_url(listen, port),
+                "api_key": key, "models": list(STATIC_MODELS), "models_source": "manual"}
     models, source = list(STATIC_MODELS), "static"
     try:
         req = urllib.request.Request(f"http://127.0.0.1:{port}/v1/models",
@@ -176,11 +189,8 @@ def connection_view():
             source = "upstream"
     except Exception:  # noqa: BLE001 — 上游不可达用静态表，不报错
         pass
-    # 局域网地址仅在 listen 绑了非回环（0.0.0.0 或裸 :port）时给出
-    exposed = listen == "" or listen.startswith(":") or listen.startswith("0.0.0.0") or listen.startswith("*")
-    ip = lan_ip() if exposed else ""
     return {"ok": True, "base_url": f"http://127.0.0.1:{port}/v1",
-            "lan_url": f"http://{ip}:{port}/v1" if ip else "",
+            "lan_url": _lan_url(listen, port),
             "api_key": key, "models": models, "models_source": source}
 
 
@@ -596,7 +606,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/accounts":
                 self._send(200, {"ok": True, **accounts_view()})
             elif path == "/connection":
-                self._send(200, connection_view())
+                self._send(200, connection_view(fetch="fetch=1" in self.path))
             elif path == "/login/status":
                 self._send(200, login_status())
             elif path == "/status":

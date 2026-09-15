@@ -515,32 +515,48 @@ async function manualClaim() {
 }
 
 /* ---------- 接入信息 ---------- */
+let CONN_MODELS = [], CONN_SOURCE = "manual", CONN_OPEN = false;
 async function loadConnection() {
   try {
-    const d = await api("/connection");
+    const d = await api("/connection");   // 默认不拉上游，返回静态 + source=manual
     $("#c-url").textContent = d.base_url;
     if (d.lan_url) {
       $("#c-lan").textContent = d.lan_url;
       $("#c-lan-k").style.display = ""; $("#c-lan-row").style.display = "flex";
     }
     KEY_RAW = d.api_key || ""; renderKey();
-    MODELS = [...new Set([...(d.models || []), ...MODELS])];
-    renderModelBadges(d.models_source === "upstream");
+    CONN_MODELS = d.models || []; CONN_SOURCE = d.models_source || "manual";
+    renderModelBadges();
   } catch (e) { /* 无妨 */ }
 }
-let MODELS_OPEN = false;
-function renderModelBadges(fromUpstream) {
-  const show = MODELS_OPEN ? MODELS : MODELS.slice(0, 6);
+function renderModelBadges() {
+  const show = CONN_OPEN ? CONN_MODELS : CONN_MODELS.slice(0, 6);
+  const fetchLabel = CONN_SOURCE === "upstream" ? "重新获取" : CONN_SOURCE === "static" ? "重试获取" : "获取上游模型";
   let html = show.map(m =>
     `<span class="badge" style="cursor:pointer" title="点击复制">${esc(m)}</span>`).join(" ");
-  if (MODELS.length > 6)
-    html += ` <button class="small" id="btn-models-more">${MODELS_OPEN ? "收起" : `+${MODELS.length - 6} 更多`}</button>`;
-  html += ` <span class="muted" style="width:100%">${fromUpstream
-    ? "模型清单实时取自上游（1 小时缓存）" : "上游未连通，暂显常用模型"}</span>`;
+  if (CONN_MODELS.length > 6)
+    html += ` <button class="small" id="btn-models-more">${CONN_OPEN ? "收起" : `+${CONN_MODELS.length - 6} 更多`}</button>`;
+  html += ` <button class="small" id="btn-models-fetch">${fetchLabel}</button>`;
+  const note = CONN_SOURCE === "upstream" ? "已从上游获取（wb2api 缓存 1 小时）"
+    : CONN_SOURCE === "static" ? "上游未连通，显示常用模型"
+    : "点击「获取上游模型」拉取实时清单（wb2api 缓存 1 小时）";
+  html += ` <span class="muted" style="width:100%">模型清单不会自动拉取；${note}</span>`;
   $("#c-models").innerHTML = html;
   $$("#c-models .badge").forEach(b => b.onclick = () => copyText(b.textContent));
   const more = $("#btn-models-more");
-  if (more) more.onclick = () => { MODELS_OPEN = !MODELS_OPEN; renderModelBadges(fromUpstream); };
+  if (more) more.onclick = () => { CONN_OPEN = !CONN_OPEN; renderModelBadges(); };
+  $("#btn-models-fetch").onclick = fetchUpstreamModels;
+}
+async function fetchUpstreamModels() {
+  const btn = $("#btn-models-fetch");
+  btn.disabled = true; btn.textContent = "获取中…";
+  try {
+    const d = await api("/connection?fetch=1");
+    CONN_MODELS = d.models || []; CONN_SOURCE = d.models_source || "static"; CONN_OPEN = false;
+    renderModelBadges();
+    toast(CONN_SOURCE === "upstream" ? `已获取 ${CONN_MODELS.length} 个模型` : "上游未连通，显示常用模型",
+          CONN_SOURCE === "upstream" ? "ok" : "err");
+  } catch (e) { toast("获取失败：" + e.message, "err"); btn.disabled = false; btn.textContent = "重试获取"; }
 }
 function renderKey() {
   $("#c-key").textContent = !KEY_RAW ? "-" :
