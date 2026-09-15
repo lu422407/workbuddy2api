@@ -814,7 +814,7 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 			cancel()
 			kind := Classify(resp.StatusCode, string(raw))
 			log.Printf("WARN: [upstream] chat_stream uid=%s: upstream %d %s body=%s",
-				logfmt.UID8(a.UID), resp.StatusCode, kind, truncate(string(raw), 200))
+				logfmt.UID8(a.UID), resp.StatusCode, kind, bodySnippet(string(raw), 600))
 			// global 首次路径 404/405 → 换 fallback 路径重试；其余状态码直接返回。
 			if attempt < len(c.chatPaths(a))-1 && chatFallbackHTTPStatus(resp.StatusCode) {
 				continue
@@ -1326,4 +1326,68 @@ func truncate(s string, n int) string {
 		return s[:n]
 	}
 	return s
+}
+
+// bodySnippet 生成错误日志用的响应摘要。
+//
+// HTML（WAF 拦截页 / 网关错误页）与 JSON 走不同策略：WAF 页的正文（拦截原因、
+// 请求 ID、规则编号）在文档中后段，前 200 字符只有 <!DOCTYPE ...><title> 这类
+// 样板——按字节硬截断会把唯一有用的信息切掉，日志里只剩 "WAF Block Page"，
+// 排查时无法回答"为什么被拦"。这里对 HTML 先剥离标签与 script/style，压缩空白后
+// 再截断，让可见文案与关键标识进入日志。
+func bodySnippet(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if !looksLikeHTML(s) {
+		return truncate(s, n)
+	}
+	s = stripHTMLNoise(s)
+	s = strings.Join(strings.Fields(s), " ")
+	if s == "" {
+		return "(html body, no visible text)"
+	}
+	return truncate(s, n)
+}
+
+func looksLikeHTML(s string) bool {
+	head := strings.ToLower(truncate(s, 256))
+	return strings.HasPrefix(head, "<!doctype") || strings.HasPrefix(head, "<html") ||
+		strings.Contains(head, "<head>") || strings.Contains(head, "<body")
+}
+
+var (
+	// Go 正则不支持反向引用，script/style 各写一条（成对标签由 [\s\S]*? 跨行匹配）
+	htmlScriptRe = regexp.MustCompile(`(?is)<script\b[^>]*>.*?</script\s*>`)
+	htmlStyleRe  = regexp.MustCompile(`(?is)<style\b[^>]*>.*?</style\s*>`)
+	htmlTagRe    = regexp.MustCompile(`(?s)<[^>]*>`)
+	htmlMetaRe   = regexp.MustCompile(`(?is)<meta[^>]*>`)
+)
+
+// stripHTMLNoise 去掉标签与脚本/样式，保留可选 meta 里的关键标识（如请求 ID）。
+func stripHTMLNoise(s string) string {
+	// meta 中的 content 常含 requestId / rayId 等排查标识，转成 "name=value" 文本保留。
+	var meta []string
+	for _, m := range htmlMetaRe.FindAllString(s, -1) {
+		name := attrValue(m, "name")
+		content := attrValue(m, "content")
+		if name != "" && content != "" && len(content) < 200 {
+			meta = append(meta, name+"="+content)
+		}
+	}
+	s = htmlScriptRe.ReplaceAllString(s, " ")
+	s = htmlStyleRe.ReplaceAllString(s, " ")
+	s = htmlTagRe.ReplaceAllString(s, " ")
+	if len(meta) > 0 {
+		s = strings.Join(meta, " ") + " " + s
+	}
+	return s
+}
+
+// attrValue 取出简单 HTML 属性值（够用即可，不做完整解析）。
+func attrValue(tag, attr string) string {
+	re := regexp.MustCompile(`(?i)\b` + attr + `\s*=\s*["']([^"']*)["']`)
+	m := re.FindStringSubmatch(tag)
+	if len(m) == 2 {
+		return m[1]
+	}
+	return ""
 }
