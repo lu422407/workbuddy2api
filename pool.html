@@ -421,10 +421,27 @@ async function checkin(btn, quiet) {
   btn.disabled = true; btn.textContent = "签到中…";
   try {
     const r = await api(`/accounts/${encodeURIComponent(uid)}/checkin`, { method: "POST" });
-    if (!quiet) toast(r.ok ? "签到完成" : "签到失败：" + (r.output || "").slice(-80), r.ok ? "ok" : "err");
+    // signin 的 status 列区分结果：ALREADY=今天已签（正常幂等，非失败）、OK=本次签到成功。
+    // 之前一律提示"签到完成"，已签的号看不出是刚签的还是早就签过。
+    const out = r.output || "";
+    const already = /\bALREADY\b/.test(out);
+    const gained = /今日获得|获得\s*\d+|gained/i.test(out);
+    if (!quiet) {
+      if (already) toast("今天已签到过（无需重复）", "ok");
+      else if (r.ok && gained) toast("签到成功，积分已到账", "ok");
+      else if (r.ok) toast("签到完成", "ok");
+      else toast("签到失败：" + out.slice(-80), "err");
+    }
     return r.ok;
   } catch (e) { if (!quiet) toast("签到失败：" + e.message, "err"); return false; }
-  finally { btn.disabled = false; btn.textContent = "签到"; }
+  finally {
+    btn.disabled = false; btn.textContent = "签到";
+    // 单号签到此前不刷新任何数据，积分/到期仍显示旧值（用户以为没生效）。
+    // 刷新积分与到期（后者走 15 分钟缓存，签到可能回血解冻余额）。
+    loadAccounts();
+    loadExpiries(false);
+    loadCheckinLog();
+  }
 }
 
 async function loadCheckinLog() {
