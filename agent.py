@@ -317,11 +317,7 @@ def import_auths(items, overwrite=True, dry_run=False):
             continue
         try:
             os.makedirs(AUTH_DIR, exist_ok=True)
-            tmp = path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(doc, f, indent=1, ensure_ascii=False)
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, path)
+            write_auth_file(path, doc)
             results.append({"file": os.path.basename(name), "uid": uid,
                             "nickname": nickname, "ok": True})
         except Exception as e:  # noqa: BLE001
@@ -543,6 +539,27 @@ def write_settings(changes):
             "note": "已重启网关使配置生效"}
 
 
+def write_auth_file(path, doc):
+    """原子写凭证文件并强制 0600（仅本人可读）。
+
+    普通 open(..., "w") 会按进程 umask 落盘（实测 644 = 同机其他用户可读），
+    而这里存的是可用的账号 token。先写临时文件再 os.replace，避免写一半被读到；
+    权限在写盘时就用 os.open 的 mode 指定（不依赖后续 chmod，避免窗口期）。
+    """
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(doc, f, indent=1, ensure_ascii=False)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    os.replace(tmp, path)
+
+
 def signin_one(uid):
     """单账号签到：临时目录里只放它一个 auth 文件，再跑官方 signin。"""
     target = None
@@ -685,8 +702,7 @@ def _watch_login(expected_url: str, realm: str = "cn") -> None:
             os.makedirs(AUTH_DIR, exist_ok=True)
             path = os.path.join(AUTH_DIR, f"workbuddy-{uid}.json")
             existed = os.path.exists(path)
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(auth, f, indent=1, ensure_ascii=False)
+            write_auth_file(path, auth)
             restart = restart_wb2api()
             with _login_lock:
                 _login = {"pending": False, "url": expected_url,
@@ -742,8 +758,7 @@ def login_complete():
     os.makedirs(AUTH_DIR, exist_ok=True)
     path = os.path.join(AUTH_DIR, f"workbuddy-{uid}.json")
     existed = os.path.exists(path)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(auth, f, indent=1, ensure_ascii=False)
+    write_auth_file(path, auth)
     restarted = restart_wb2api()
     return {"ok": True, "uid": uid, "nickname": auth["account"]["nickname"],
             "realm": auth["auth"]["realm"],
