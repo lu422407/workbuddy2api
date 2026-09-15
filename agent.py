@@ -194,6 +194,44 @@ def connection_view(fetch: bool = False):
             "api_key": key, "models": models, "models_source": source}
 
 
+LOG_TAIL_BYTES = 256 * 1024
+
+
+def prompt_state():
+    """从网关日志探测「降级」状态（prompt 被替换成中性提示词）。
+
+    为什么读日志：降级状态在网关进程内存（degradeGate），只绑 127.0.0.1 的
+    /status 未透出该字段，也没有可查询端点。日志里的标记是唯一外部可见信号。
+
+    判定：以最后一次「降级触发」和最后一次「网关启动/降级重置」谁更晚为准。
+    passthrough 模式下一旦触发，提示词被换成 Degraded 直到 CST 次日 00:00 或
+    进程重启——期间客户端的人设/工具指令全部失效，所以值得显式告警。
+    """
+    try:
+        with open("/tmp/wb2api.log", "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - LOG_TAIL_BYTES))
+            if size > LOG_TAIL_BYTES:
+                f.readline()  # 丢掉可能被截断的首行
+            text = f.read().decode("utf-8", errors="replace")
+    except Exception:  # noqa: BLE001 — 日志不可读不该让状态查询失败
+        return {"degraded": None, "reason": "日志不可读"}
+
+    last_trigger = last_reset = -1
+    for i, line in enumerate(text.splitlines()):
+        if "content-blocked" in line and "degraded prompt retry" in line:
+            last_trigger = i
+        elif "listening on" in line:  # 进程重启 → 降级状态清零
+            last_reset = i
+    if last_trigger < 0:
+        return {"degraded": False, "reason": "未触发过降级"}
+    if last_reset > last_trigger:
+        return {"degraded": False, "reason": "本次启动后未触发（或已重启清零）"}
+    return {"degraded": True,
+            "reason": "客户端 system 提示词已被替换为中性提示词（持续到北京时间次日 00:00 或网关重启）"}
+
+
 def wb2api_status():
     cfg = {}
     try:
@@ -602,6 +640,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/health":
                 self._send(200, {"ok": True, "service": "wb2api-agent",
                                  "wb2api": wb2api_status(),
+                                 "prompt": prompt_state(),
                                  "auth_count": len(read_auths())})
             elif path == "/accounts":
                 self._send(200, {"ok": True, **accounts_view()})

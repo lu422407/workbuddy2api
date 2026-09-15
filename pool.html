@@ -142,6 +142,8 @@
   <div class="chips">
     <span class="chip"><i id="d-api" class="dot"></i><span id="t-api">检测中…</span></span>
     <span class="chip"><span id="t-pool"></span></span>
+    <span class="chip" id="chip-prompt" style="display:none;color:var(--warn);border-color:rgba(255,180,84,.45)">
+      <i class="dot" style="background:var(--warn)"></i><span id="t-prompt"></span></span>
   </div>
   <span class="grow"></span>
   <button id="btn-reload" class="small">刷新</button>
@@ -280,6 +282,16 @@ async function loadHealth() {
     for (const a of st.accounts || []) HEALTH[a.uid] = a;
     $("#t-pool").textContent = `账号 ${h.auth_count}` +
       (st.total != null ? ` · 健康 ${st.healthy ?? 0}/${st.total}` : "");
+    // 降级期告警：此时客户端 system 提示词已被网关替换为中性提示词
+    const ps = h.prompt || {};
+    const chip = $("#chip-prompt");
+    if (ps.degraded) {
+      chip.style.display = ""; 
+      $("#t-prompt").textContent = "提示词已降级";
+      chip.title = ps.reason || "";
+    } else {
+      chip.style.display = "none";
+    }
     renderAccounts();
   } catch (e) {
     $("#d-api").className = "dot bad";
