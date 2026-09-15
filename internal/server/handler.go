@@ -19,6 +19,7 @@ import (
 	"workbuddy2api/internal/prompt"
 	"workbuddy2api/internal/session"
 	"workbuddy2api/internal/upstream"
+	"workbuddy2api/internal/usage"
 )
 
 // Config handler 依赖。
@@ -640,6 +641,16 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				// 不算合法成本观测（缺失≠0），仅记一条 WARN 协助排障，绝不写入账本。
 				log.Printf("WARN: [server] stream usage without credit uid=%s model=%s (no cost observation)", logfmt.UID8(acct.UID), bareModel)
 			}
+			// 用量落盘（观测，非主链路；未配置 usage_file 时零开销）。
+			creditVal, _ := stats.Credit()
+			if toks, hasUsage := stats.Tokens(); hasUsage {
+				usage.Record(usage.Entry{
+					Model: bareModel, Realm: realm, UID: acct.UID,
+					Prompt: stats.PromptTokens(), Completion: toks, Total: stats.TotalTokens(),
+					Credit: creditVal, Stream: true,
+					DurationMS: time.Since(st.start).Milliseconds(),
+				})
+			}
 			rc.Close()
 			return
 		}
@@ -657,6 +668,15 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		// 成本账本（非流式）：从聚合响应的 usage 取 credit 与 token 总数。
 		if credit, total, ok := usageCreditTotal(resp); ok {
 			h.cfg.Pool.NoteModelCost(acct.UID, bareModel, credit, total)
+		}
+		// 用量落盘（观测，非主链路）。
+		if prompt, completion, total, credit, ok := usageDetail(resp); ok {
+			usage.Record(usage.Entry{
+				Model: bareModel, Realm: realm, UID: acct.UID,
+				Prompt: prompt, Completion: completion, Total: total,
+				Credit: credit, Stream: false,
+				DurationMS: time.Since(st.start).Milliseconds(),
+			})
 		}
 		return
 	}

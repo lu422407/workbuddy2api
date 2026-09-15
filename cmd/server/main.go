@@ -18,6 +18,7 @@ import (
 	"workbuddy2api/internal/server"
 	"workbuddy2api/internal/session"
 	"workbuddy2api/internal/upstream"
+	"workbuddy2api/internal/usage"
 )
 
 func main() {
@@ -48,6 +49,9 @@ func main() {
 
 	// redisstore：未配置/连接失败 → Noop（纯内存模式，一切功能照常）。
 	store := redisstore.New(cfg.Upstash.URL, cfg.Upstash.Token)
+
+	// 用量落盘：配置了 usage_file 才开启（空 = 完全关闭，无文件、无开销）。
+	usage.Configure(cfg.UsageFile)
 
 	p := pool.New(cfg.StateFile)
 	defer p.Close() // 进程退出前停后台落盘 goroutine + 最后补一次落盘（FIX-4:goroutine 泄漏）

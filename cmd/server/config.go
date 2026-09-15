@@ -19,6 +19,10 @@ type Config struct {
 	APIKey    string `json:"api_key"`    // 空 = 不鉴权
 	AuthDir   string `json:"auth_dir"`   // ./auths
 	StateFile string `json:"state_file"` // ./data/state.json
+	// UsageFile 请求用量 JSONL 落盘路径（空 = 关闭采集）。
+	// 每次成功请求追加一行 {ts,model,realm,uid,prompt,completion,credit,...}，
+	// 供宿主机控制台聚合趋势图（见 internal/usage）。不含任何提示词内容。
+	UsageFile string `json:"usage_file"`
 
 	Server struct {
 		// MaxBodyMB 聊天请求体大小上限（单位 MB，默认 8）。
@@ -212,6 +216,9 @@ func applyEnv(c *Config) {
 	}
 	if v := os.Getenv("WB2A_STATE_FILE"); v != "" {
 		c.StateFile = v
+	}
+	if v := os.Getenv("WB2A_USAGE_FILE"); v != "" {
+		c.UsageFile = v
 	}
 	if v := os.Getenv("WB2A_MAX_BODY_MB"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {

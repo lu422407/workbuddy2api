@@ -15,6 +15,7 @@
 用法:
     D:\\AI_Gateway_NewAPI\\.venv\\Scripts\\python.exe D:\\workbuddy2api\\agent.py
 """
+import hashlib
 import json
 import os
 import shutil
@@ -254,6 +255,174 @@ def wb2api_status():
             return {"up": True, "port": port, "status": json.loads(r.read().decode() or "{}")}
     except Exception as e:  # noqa: BLE001
         return {"up": False, "port": port, "error": str(e)}
+
+
+def export_auths():
+    """导出全部账号凭证（含 token）为一份迁移包 JSON。
+
+    刻意返回明文 token：这就是"把账号搬到另一台机器"的载体，与 auths/ 目录同密级。
+    端点仅绑 127.0.0.1，且只有本机浏览器能取；界面上另有"不含 token"的仅导出
+    账号清单模式（见 include_tokens=False），便于只做备份/交接说明。
+    """
+    out = []
+    for name in sorted(os.listdir(AUTH_DIR)) if os.path.isdir(AUTH_DIR) else []:
+        if not (name.startswith("workbuddy-") and name.endswith(".json")):
+            continue
+        try:
+            with open(os.path.join(AUTH_DIR, name), encoding="utf-8") as f:
+                out.append({"file": name, "doc": json.load(f)})
+        except Exception as e:  # noqa: BLE001
+            out.append({"file": name, "error": f"{type(e).__name__}: {e}"})
+    return {"ok": True, "service": "workbuddy2api", "kind": "auths-export",
+            "version": 1, "exported_at": int(time.time()), "count": len(out),
+            "accounts": out}
+
+
+def import_auths(items, overwrite=True, dry_run=False):
+    """导入凭证数组（导出包里的 accounts，或裸的单个 auth 文档数组）。
+
+    校验从严（导入的是要长期使用的凭证，写坏比拒绝更糟）：
+    - 必须能解析出 accessToken（auth.Parse 同口径）；缺失即拒绝该条并说明；
+    - uid 从 account.uid 取；取不到时保留原文件名（或按内容哈希兜底命名）；
+    - 已存在且 overwrite=False → 跳过并如实报告（不静默覆盖你的现有会话）。
+    """
+    results = []
+    for it in items or []:
+        doc = it.get("doc") if isinstance(it, dict) and "doc" in it else it
+        name = (it.get("file") if isinstance(it, dict) else None) or ""
+        if not isinstance(doc, dict):
+            results.append({"file": name, "ok": False, "error": "不是合法的 auth 文档"})
+            continue
+        auth = doc.get("auth") if isinstance(doc.get("auth"), dict) else doc
+        token = auth.get("accessToken") or auth.get("access_token") or ""
+        acct = doc.get("account") if isinstance(doc.get("account"), dict) else doc
+        uid = (acct.get("uid") or doc.get("uid") or "").strip()
+        if not token:
+            results.append({"file": name, "uid": uid, "ok": False,
+                            "error": "缺少 accessToken（不是有效的凭证文件）"})
+            continue
+        if not name:
+            name = f"workbuddy-{uid}.json" if uid else ""
+        if not (name.startswith("workbuddy-") and name.endswith(".json")):
+            name = f"workbuddy-{uid or hashlib.sha1(token.encode()).hexdigest()[:16]}.json"
+        path = os.path.join(AUTH_DIR, os.path.basename(name))
+        nickname = acct.get("nickname") or doc.get("nickname") or ""
+        if os.path.exists(path) and not overwrite:
+            results.append({"file": os.path.basename(name), "uid": uid, "ok": False,
+                            "skipped": True, "error": "已存在（未勾选覆盖）"})
+            continue
+        if dry_run:
+            results.append({"file": os.path.basename(name), "uid": uid,
+                            "nickname": nickname, "ok": True, "dry_run": True})
+            continue
+        try:
+            os.makedirs(AUTH_DIR, exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(doc, f, indent=1, ensure_ascii=False)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+            results.append({"file": os.path.basename(name), "uid": uid,
+                            "nickname": nickname, "ok": True})
+        except Exception as e:  # noqa: BLE001
+            results.append({"file": os.path.basename(name), "uid": uid, "ok": False,
+                            "error": f"{type(e).__name__}: {e}"})
+    imported = [r for r in results if r.get("ok")]
+    return {"ok": True, "imported": len(imported), "total": len(results),
+            "results": results, "dry_run": bool(dry_run)}
+
+
+USAGE_FILE = os.path.join(BASE, "data", "usage.jsonl")
+
+
+def usage_stats(days: int = 30):
+    """聚合网关落盘的用量 JSONL → 按天/模型/账号的消耗与 token 统计。
+
+    数据源是网关自己写的 data/usage.jsonl（internal/usage 模块），每次成功请求
+    一行。这里只做读+聚合，不写。文件读尾部若干 MB 足够覆盖 days 天。
+    """
+    if not os.path.exists(USAGE_FILE):
+        return {"ok": True, "empty": True, "days": days,
+                "note": "还没有用量记录（网关需配置 usage_file 并产生请求）",
+                "daily": [], "by_model": [], "by_account": [], "totals": {}}
+    try:
+        with open(USAGE_FILE, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            cap = 8 * 1024 * 1024          # 只读尾部 8MB
+            f.seek(max(0, size - cap))
+            if size > cap:
+                f.readline()
+            lines = f.read().decode("utf-8", errors="replace").splitlines()
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(e).__name__}: {e}",
+                "daily": [], "by_model": [], "by_account": [], "totals": {}}
+
+    cutoff = time.time() - days * 86400
+    daily, by_model, by_account = {}, {}, {}
+    totals = {"requests": 0, "credit": 0.0, "prompt": 0, "completion": 0, "total": 0}
+    for ln in lines:
+        try:
+            e = json.loads(ln)
+        except Exception:  # noqa: BLE001
+            continue
+        ts = e.get("ts") or 0
+        if ts < cutoff:
+            continue
+        day = time.strftime("%Y-%m-%d", time.localtime(ts))
+        credit = float(e.get("credit") or 0)
+        prompt = int(e.get("prompt") or 0)
+        comp = int(e.get("completion") or 0)
+        tot = int(e.get("total") or (prompt + comp))
+        model = e.get("model") or "?"
+        realm = e.get("realm") or "cn"
+
+        d = daily.setdefault(day, {"day": day, "requests": 0, "credit": 0.0,
+                                   "prompt": 0, "completion": 0, "total": 0, "by_model": {}})
+        d["requests"] += 1; d["credit"] += credit
+        d["prompt"] += prompt; d["completion"] += comp; d["total"] += tot
+        dm = d["by_model"].setdefault(model, {"credit": 0.0, "total": 0, "requests": 0})
+        dm["credit"] += credit; dm["total"] += tot; dm["requests"] += 1
+
+        m = by_model.setdefault(model, {"model": model, "realm": realm, "requests": 0,
+                                        "credit": 0.0, "prompt": 0, "completion": 0, "total": 0})
+        m["requests"] += 1; m["credit"] += credit
+        m["prompt"] += prompt; m["completion"] += comp; m["total"] += tot
+
+        a = by_account.setdefault(e.get("uid") or "?", {"uid": e.get("uid") or "?",
+                                                         "requests": 0, "credit": 0.0,
+                                                         "prompt": 0, "completion": 0, "total": 0})
+        a["requests"] += 1; a["credit"] += credit
+        a["prompt"] += prompt; a["completion"] += comp; a["total"] += tot
+
+        totals["requests"] += 1; totals["credit"] += credit
+        totals["prompt"] += prompt; totals["completion"] += comp; totals["total"] += tot
+
+    # 昵称映射（uid → nickname），让前端显示可读名称
+    nick = {a["uid"]: (a.get("nickname") or a["uid"][:8]) for a in read_auths()}
+    accs = list(by_account.values())
+    for a in accs:
+        a["nickname"] = nick.get(a["uid"], a["uid"][:8])
+    accs.sort(key=lambda x: -x["credit"])
+
+    daily_list = sorted(daily.values(), key=lambda x: x["day"])
+    for d in daily_list:
+        d["by_model"] = [{"model": k, **v} for k, v in
+                         sorted(d["by_model"].items(), key=lambda kv: -kv[1]["credit"])]
+    models = sorted(by_model.values(), key=lambda x: -x["credit"])
+    totals["credit"] = round(totals["credit"], 2)
+
+    today = time.strftime("%Y-%m-%d")
+    d7 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 6 * 86400))
+    month = today[:7] + "-01"
+    def sum_since(since):
+        return round(sum(d["credit"] for d in daily_list if d["day"] >= since), 2)
+    return {"ok": True, "empty": not daily_list, "days": days,
+            "today_credit": sum_since(today),
+            "week_credit": sum_since(d7),
+            "month_credit": sum_since(month),
+            "daily": daily_list, "by_model": models,
+            "by_account": accs, "totals": totals}
 
 
 def signin_one(uid):
@@ -644,6 +813,8 @@ class Handler(BaseHTTPRequestHandler):
                                  "auth_count": len(read_auths())})
             elif path == "/accounts":
                 self._send(200, {"ok": True, **accounts_view()})
+            elif path == "/accounts/export":
+                self._send(200, export_auths())
             elif path == "/connection":
                 self._send(200, connection_view(fetch="fetch=1" in self.path))
             elif path == "/login/status":
@@ -654,6 +825,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, expiries(fresh="fresh=1" in self.path))
             elif path == "/checkin-log":
                 self._send(200, checkin_log())
+            elif path == "/usage":
+                days = 30
+                if "days=" in self.path:
+                    try:
+                        days = max(1, min(365, int(self.path.split("days=")[1].split("&")[0])))
+                    except Exception:  # noqa: BLE001
+                        pass
+                self._send(200, usage_stats(days))
             elif path == "/upstream/models":
                 self._proxy_upstream("GET", "/v1/models")
             else:
@@ -677,6 +856,26 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, login_complete())
             elif path == "/wb2api/restart":
                 self._send(200, restart_wb2api())
+            elif path == "/accounts/import":
+                length = int(self.headers.get("Content-Length") or 0)
+                body = {}
+                if length:
+                    try:
+                        body = json.loads(self.rfile.read(length))
+                    except Exception as e:  # noqa: BLE001
+                        self._send(400, {"ok": False, "error": f"请求体不是合法 JSON: {e}"})
+                        return
+                items = body.get("accounts") if isinstance(body, dict) else body
+                if not isinstance(items, list):
+                    self._send(400, {"ok": False,
+                                     "error": "需要 accounts 数组（导出包或裸凭证数组）"})
+                    return
+                res = import_auths(items, overwrite=bool(body.get("overwrite", True)),
+                                   dry_run=bool(body.get("dry_run", False)))
+                # 真正写入后需重启才加载新账号（池在启动时扫描目录）；dry_run 不动。
+                if res["imported"] and not res["dry_run"]:
+                    res["restart"] = restart_wb2api()
+                self._send(200, res)
             elif path == "/upstream/chat":
                 length = int(self.headers.get("Content-Length") or 0)
                 body = self.rfile.read(length) if length else b"{}"

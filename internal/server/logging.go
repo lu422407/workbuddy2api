@@ -85,6 +85,9 @@ func (s *chatStatsReader) Credit() (float64, bool) { return s.credit, s.hasUsage
 // TotalTokens 返回本次请求总 token 数（prompt + completion），供成本单价折算。
 func (s *chatStatsReader) TotalTokens() int { return s.prompt + s.tokens }
 
+// PromptTokens 返回末帧 usage.prompt_tokens（用量落盘用；缺失时为 0）。
+func (s *chatStatsReader) PromptTokens() int { return s.prompt }
+
 // parseSSELine 解析一行 "data: {...}"：首帧记 TTFB，含 usage 时采信精确 completion_tokens。
 func (s *chatStatsReader) parseSSELine(line string) {
 	line = strings.TrimRight(line, "\r\n")
@@ -174,6 +177,28 @@ func usageCreditTotal(resp map[string]any) (credit float64, total int, ok bool) 
 		return 0, 0, false
 	}
 	return c, int(pt) + int(ct), true
+}
+
+// usageDetail 解析聚合响应的 usage 明细（用量落盘用）：prompt/completion/total/credit。
+// 与 usageCreditTotal 的区别：后者要求 credit 存在（成本账本口径），本函数在仅有 token
+// 时也返回 ok（观测口径——缺 credit 记 0，仍是有效的 token 用量样本）。
+func usageDetail(resp map[string]any) (prompt, completion, total int, credit float64, ok bool) {
+	u, isMap := resp["usage"].(map[string]any)
+	if !isMap {
+		return 0, 0, 0, 0, false
+	}
+	pt, _ := u["prompt_tokens"].(float64)
+	ct, _ := u["completion_tokens"].(float64)
+	c, _ := u["credit"].(float64)
+	tt, hasTotal := u["total_tokens"].(float64)
+	if pt == 0 && ct == 0 && !hasTotal {
+		return 0, 0, 0, 0, false
+	}
+	total = int(tt)
+	if total == 0 {
+		total = int(pt) + int(ct)
+	}
+	return int(pt), int(ct), total, c, true
 }
 
 // uidPrefix 只显示 uid 前 8 位；空 uid 显示 "-"。
