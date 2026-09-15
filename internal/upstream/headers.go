@@ -17,6 +17,16 @@ const (
 	// package.json version，5.5.4 分发包即 5.5.4）。config upstream.client_version
 	// 可覆盖（空 = 内置默认）。
 	defaultClientVersion = "5.5.4"
+	// defaultClientVersionGlobal 国际版（global realm）出站客户端版本段。
+	//
+	// 为什么必须与 CN 分开：两个官方分发包的版本号并不一致——本机实测
+	// /Applications/WorkBuddy.app（com.tencent.workbuddy.mac，CN）为 5.5.4，
+	// 而 /Applications/WorkBuddy AI.app（com.workbuddy.workbuddy-ai，国际版）为 5.5.2。
+	// 用 CN 版本号发国际域，会让上游看到「版本比官方已发布的国际客户端还新」的
+	// WorkBuddy AI 流量——这是可被风控识别的异常特征（实测 WAF 拦截集中在 global 域，
+	// CN 域 296 次请求零拦截）。
+	// config upstream.client_version 显式设置时仍优先（同时覆盖两域）。
+	defaultClientVersionGlobal = "5.5.2"
 	// defaultCliVersion 出站 UA 中 `CLI/<ver>` 段版本。对齐官方内置 CLI
 	// （step1 §1.4：cli/package.json publishConfig.customPackage version = 2.137.1
 	// → resolveBundledCliUserAgent() 返回 CLI/2.137.1）。config upstream.cli_version
@@ -45,6 +55,22 @@ func (c *Client) clientVersion() string {
 	return defaultClientVersion
 }
 
+// clientVersionFor 按账号 realm 返回客户端版本段。
+//
+// 显式配置（Client.ClientVersion）优先且两域同值——用户配了就完全以用户值为准。
+// 未配置时按 realm 取内置默认：global → defaultClientVersionGlobal（5.5.2，对齐官方
+// 国际版分发包），其余 → defaultClientVersion（5.5.4，CN 分发包）。
+// 传 nil（无账号上下文，如 CN 默认形态）视同 CN，保持既有调用零回归。
+func (c *Client) clientVersionFor(a *auth.Auth) string {
+	if c != nil && c.ClientVersion != "" {
+		return c.ClientVersion
+	}
+	if a != nil && a.IsGlobal() {
+		return defaultClientVersionGlobal
+	}
+	return defaultClientVersion
+}
+
 // cliVersion 生效的 CLI 版本：Client.CliVersion 非空则取之，否则内置默认 defaultCliVersion。
 func (c *Client) cliVersion() string {
 	if c != nil && c.CliVersion != "" {
@@ -62,12 +88,16 @@ func (c *Client) cliVersion() string {
 // global 账号送错平台段（`WorkBuddy` 非 `WorkBuddy AI`）可能触发上游 403 code 11140
 // "request illegal" 风控。官方无任何 UA 随机化（step1 §4），故默认确定性。
 // realm 判定委托 auth.Realm()（含全局开关逃生门）。
+//
+// 版本段同样按 realm 取（clientVersionFor）：两域官方版本号不同（5.5.4 / 5.5.2），
+// 用 CN 版本发 global 会呈现「比官方国际客户端更新的版本」这一异常特征。
 func (c *Client) defaultWorkBuddyUAFor(a *auth.Auth) string {
 	platform := "WorkBuddy"
 	if a != nil && a.IsGlobal() {
 		platform = "WorkBuddy AI"
 	}
-	return "WorkBuddy/" + c.clientVersion() + " " + platform + "/" + c.clientVersion() + " CLI/" + c.cliVersion()
+	ver := c.clientVersionFor(a)
+	return "WorkBuddy/" + ver + " " + platform + "/" + ver + " CLI/" + c.cliVersion()
 }
 
 // defaultWorkBuddyUA 返回 CN 形态的默认 UA（默认账号形态即 CN，零回归兼容既有调用/测试）。
@@ -224,7 +254,7 @@ func (c *Client) ChatHeaders(req *http.Request, a *auth.Auth, clientIP string, m
 	// 识别 client，避免上游用量统计里 client/agentPurpose 为空。来源 xiaofan6ya/converter.py。
 	// 默认（ClientName 空）即伪造 WorkBuddy 桌面端头组（见 injectAttribution）；
 	// 显式 ClientName="SaaS" 还原旧行为（仅 X-Product="SaaS"）。
-	c.injectAttribution(req)
+	c.injectAttribution(req, a)
 	// 客户端 IP 透传：仅当 PassthroughIP=true 且本次请求 clientIP 参数非空（见 handler 设置）。
 	// 缺省 false（反代安全边界：不把内网/代理 IP 暴露给上游）。
 	c.injectClientIP(req, clientIP)
@@ -308,7 +338,7 @@ func (c *Client) attributionClientName() string {
 // banner 白名单头组完全同形（application-manifest.js:27590-27601），上游用量归因从此
 // 不再出现 client/agentPurpose 为空的「网关特征」。显式 ClientName="SaaS" 还原旧行为
 // （仅 X-Product="SaaS"，不设 X-IDE-*）；配其他值则四头跟随该值。
-func (c *Client) injectAttribution(req *http.Request) {
+func (c *Client) injectAttribution(req *http.Request, a *auth.Auth) {
 	name := c.attributionClientName()
 	if name == "SaaS" {
 		req.Header.Set("X-Product", "SaaS")
@@ -317,7 +347,9 @@ func (c *Client) injectAttribution(req *http.Request) {
 	req.Header.Set("X-Agent-Purpose", "conversation")
 	req.Header.Set("X-IDE-Name", name)
 	req.Header.Set("X-IDE-Type", name)
-	req.Header.Set("X-IDE-Version", c.clientVersion())
+	// 版本按 realm 取：与 UA、X-IDE-Name（WorkBuddy / WorkBuddy AI）保持一致，
+	// 否则同一个请求里品牌段说国际版、版本段却是 CN 版本号（见 clientVersionFor）。
+	req.Header.Set("X-IDE-Version", c.clientVersionFor(a))
 	req.Header.Set("X-Product", name)
 }
 
