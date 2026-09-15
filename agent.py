@@ -425,6 +425,124 @@ def usage_stats(days: int = 30):
             "by_account": accs, "totals": totals}
 
 
+# ---------- 设置读写（白名单 + 原子写 + 需重启提示） ----------
+
+# 可在线调整的配置项：(键路径, 类型, 说明)。刻意只暴露常用项——
+# 全量 config 在线编辑风险太高（写坏 upstream 段会直接打不通上游），
+# 需要冷门项时改 config.json 再重启。
+SETTINGS_SCHEMA = [
+    ("schedule.checkin_enabled",   bool, "自动签到（每日 09:00 / 21:00，国际号自动跳过）"),
+    ("schedule.travel_hours",      list, "猫猫旅行时点"),
+    ("schedule.activity_enabled",  bool, "活跃上报（每日 10:00，用于连登/领养前置）"),
+    ("schedule.keepalive_enabled", bool, "Token 保活（每日 22:00 全账号刷新）"),
+    ("schedule.school_enabled",    bool, "开学季任务"),
+    ("schedule.cat_enabled",       bool, "夜猫子任务"),
+]
+
+
+def _get_path(doc, dotted):
+    cur = doc
+    for part in dotted.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return None, False
+        cur = cur[part]
+    return cur, True
+
+
+def _set_path(doc, dotted, value):
+    parts = dotted.split(".")
+    cur = doc
+    for p in parts[:-1]:
+        if not isinstance(cur.get(p), dict):
+            cur[p] = {}
+        cur = cur[p]
+    cur[parts[-1]] = value
+
+
+def read_settings():
+    """读当前设置（只回白名单项 + 只读展示项）。"""
+    try:
+        with open(CONFIG, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"读取 config.json 失败: {e}"}
+    items = []
+    # 未显式配置时的默认值（与 internal/config.DefaultSchedule 对齐）：
+    # 不填默认会让 list 项显示成空数组——用户一保存就把该任务关掉（如 travel_hours=[]）。
+    defaults = {
+        "schedule.checkin_enabled": True, "schedule.activity_enabled": True,
+        "schedule.keepalive_enabled": True, "schedule.school_enabled": True,
+        "schedule.cat_enabled": True,
+        "schedule.travel_hours": [9, 21],
+    }
+    for key, typ, label in SETTINGS_SCHEMA:
+        val, present = _get_path(cfg, key)
+        if not present or val in (None, []):
+            val = defaults.get(key, [] if typ is list else False)
+        items.append({"key": key, "type": typ.__name__, "label": label,
+                      "value": val, "explicit": present})
+    # 只读展示项（改这些要动 config.json，不放开关）
+    ro = {
+        "listen": cfg.get("listen", ""),
+        "auth_dir": cfg.get("auth_dir", ""),
+        "usage_file": cfg.get("usage_file", ""),
+        "prompt_mode": (cfg.get("prompt") or {}).get("mode", "passthrough"),
+        "max_in_flight": (cfg.get("pool") or {}).get("max_in_flight"),
+        "soft_rate": (cfg.get("cooldown") or {}).get("soft_rate"),
+        "sanitize": (cfg.get("features") or {}).get("sanitize_blacklist_fingerprints"),
+    }
+    return {"ok": True, "items": items, "readonly": ro}
+
+
+def write_settings(changes):
+    """按白名单写入设置项；bool 直接改、list 需为合法小时数组。
+
+    原子写（tmp + rename）避免写坏配置；写前先备份一份 .bak。
+    """
+    if not isinstance(changes, dict) or not changes:
+        return {"ok": False, "error": "没有要修改的项"}
+    allowed = {k: t for k, t, _ in SETTINGS_SCHEMA}
+    unknown = [k for k in changes if k not in allowed]
+    if unknown:
+        return {"ok": False, "error": f"不支持的配置项: {', '.join(unknown)}"}
+    try:
+        with open(CONFIG, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"读取 config.json 失败: {e}"}
+
+    applied = []
+    for key, val in changes.items():
+        typ = allowed[key]
+        if typ is bool:
+            if not isinstance(val, bool):
+                return {"ok": False, "error": f"{key} 需要布尔值"}
+        else:  # list：小时数组
+            if not isinstance(val, list) or any(
+                    not isinstance(h, int) or h < 0 or h > 23 for h in val):
+                return {"ok": False, "error": f"{key} 需要 0-23 的小时数组，如 [9, 21]"}
+            if not val:
+                # 空数组 = 该任务无时点可跑（等于悄悄关掉）。要停任务请用对应的
+                # *_enabled 开关，语义明确、可回滚。
+                return {"ok": False, "error": f"{key} 不能为空；要停该任务请用对应的开关（如 travel_enabled）"}
+            val = sorted(set(val))
+        _set_path(cfg, key, val)
+        applied.append(key)
+
+    with _lock:
+        try:
+            shutil.copy2(CONFIG, CONFIG + ".bak")
+            tmp = CONFIG + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, CONFIG)
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"写入失败: {type(e).__name__}: {e}"}
+    restart = restart_wb2api()
+    return {"ok": True, "applied": applied, "restart": restart,
+            "note": "已重启网关使配置生效"}
+
+
 def signin_one(uid):
     """单账号签到：临时目录里只放它一个 auth 文件，再跑官方 signin。"""
     target = None
@@ -815,6 +933,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, {"ok": True, **accounts_view()})
             elif path == "/accounts/export":
                 self._send(200, export_auths())
+            elif path == "/settings":
+                self._send(200, read_settings())
             elif path == "/connection":
                 self._send(200, connection_view(fetch="fetch=1" in self.path))
             elif path == "/login/status":
@@ -856,6 +976,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, login_complete())
             elif path == "/wb2api/restart":
                 self._send(200, restart_wb2api())
+            elif path == "/settings":
+                length = int(self.headers.get("Content-Length") or 0)
+                try:
+                    body = json.loads(self.rfile.read(length)) if length else {}
+                except Exception as e:  # noqa: BLE001
+                    self._send(400, {"ok": False, "error": f"请求体不是合法 JSON: {e}"})
+                    return
+                self._send(200, write_settings(body.get("changes") if isinstance(body, dict) else None))
             elif path == "/accounts/import":
                 length = int(self.headers.get("Content-Length") or 0)
                 body = {}

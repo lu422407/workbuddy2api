@@ -156,6 +156,20 @@
   @media (max-width:760px){.ugrid{grid-template-columns:1fr}}
   .ugrid table{font-size:12.5px}
   .ugrid th{font-size:11px;padding:6px 6px}
+
+  /* 设置：开关行（复选框 + 滑块开关） */
+  .set-row{display:flex;align-items:center;gap:12px;padding:10px 0;
+    border-bottom:1px solid var(--line)}
+  .set-row:last-of-type{border-bottom:none}
+  .set-row > div:first-child{flex:1}
+  .switch{position:relative;display:inline-block;width:42px;height:23px;flex:none}
+  .switch input{opacity:0;width:0;height:0}
+  .switch span{position:absolute;cursor:pointer;inset:0;background:#2a3346;
+    border-radius:99px;transition:.2s}
+  .switch span:before{content:"";position:absolute;width:17px;height:17px;left:3px;top:3px;
+    background:#8a96ac;border-radius:50%;transition:.2s}
+  .switch input:checked + span{background:linear-gradient(120deg,var(--acc),#5a3de8)}
+  .switch input:checked + span:before{transform:translateX(19px);background:#fff}
 </style>
 </head>
 <body>
@@ -169,11 +183,15 @@
       <i class="dot" style="background:var(--warn)"></i><span id="t-prompt"></span></span>
   </div>
   <span class="grow"></span>
+  <div class="seg" id="nav-seg">
+    <button class="small seg-b active" data-view="main">管理台</button>
+    <button class="small seg-b" data-view="settings">设置</button>
+  </div>
   <button id="btn-reload" class="small">刷新</button>
   <button id="btn-restart" class="small">重启网关服务</button>
 </header>
 
-<main>
+<main id="view-main">
   <!-- 左列：总览 -->
   <div class="sect-gap">
     <section class="card">
@@ -287,6 +305,38 @@
         <span class="muted num" id="m-meta"></span>
       </div>
       <div class="out" id="m-out"><span class="muted">回复会显示在这里。</span></div>
+    </section>
+  </div>
+</main>
+
+<!-- 设置视图（同一页面切换视图，不引入路由） -->
+<main id="view-settings" style="display:none;grid-template-columns:1.3fr 1fr">
+  <div class="sect-gap">
+    <section class="card">
+      <h2><span class="ico">⚙️</span>定时任务
+        <span class="act"><span class="muted" id="set-hint"></span>
+        <button class="small primary" id="btn-save-settings">保存并重启</button></span></h2>
+      <div id="set-tasks"><div class="empty">加载中…</div></div>
+    </section>
+  </div>
+  <div class="sect-gap">
+    <section class="card">
+      <h2><span class="ico">🔒</span>运行参数（只读）</h2>
+      <div class="muted" style="margin-bottom:10px">
+        这些项改动风险较高或与部署环境相关，请直接编辑 <code>config.json</code> 后重启服务。
+      </div>
+      <div class="kv" id="set-readonly"></div>
+    </section>
+    <section class="card">
+      <h2><span class="ico">💾</span>配置文件</h2>
+      <div class="kv">
+        <span class="k">路径</span><span class="row"><code id="set-path">-</code>
+          <button class="small" data-copy="set-path">复制</button></span>
+      </div>
+      <div class="muted" style="margin-top:10px">
+        保存设置前会自动备份为 <code>config.json.bak</code>。修改后网关自动重启生效
+        （进行中的请求会中断）。
+      </div>
     </section>
   </div>
 </main>
@@ -592,6 +642,85 @@ function renderUsage() {
      <div class="muted" style="margin-top:10px">数据来自网关本地用量日志（每次成功请求一行），仅统计本机网关流量。</div>`;
 }
 
+/* ---------- 设置视图 ---------- */
+let SETTINGS = null, SETTINGS_DIRTY = {};
+
+function showView(name) {
+  $$("#nav-seg .seg-b").forEach(b => b.classList.toggle("active", b.dataset.view === name));
+  $("#view-main").style.display = name === "main" ? "grid" : "none";
+  $("#view-settings").style.display = name === "settings" ? "grid" : "none";
+  if (name === "settings") loadSettings();
+}
+
+async function loadSettings() {
+  $("#set-tasks").innerHTML = `<div class="empty">加载中…</div>`;
+  try {
+    SETTINGS = await api("/settings");
+    SETTINGS_DIRTY = {};
+    renderSettings();
+  } catch (e) {
+    $("#set-tasks").innerHTML = `<div class="empty" style="color:var(--bad)">加载失败：${esc(e.message)}</div>`;
+  }
+}
+
+function renderSettings() {
+  const d = SETTINGS || {};
+  const tasks = (d.items || []).filter(i => i.key.endsWith("_enabled"));
+  const hours = (d.items || []).filter(i => i.key.endsWith("_hours"));
+  $("#set-hint").textContent = "缺省全部启用；关闭后需保存才生效";
+
+  $("#set-tasks").innerHTML = tasks.map(i => `<div class="set-row">
+      <div><div class="nick">${esc(i.label)}</div>
+        <div class="uid8">${esc(i.key)}${i.explicit ? " · 已显式配置" : " · 使用缺省值"}</div></div>
+      <label class="switch">
+        <input type="checkbox" data-set="${esc(i.key)}" ${i.value ? "checked" : ""}>
+        <span></span></label>
+    </div>`).join("") +
+    (hours.length ? hours.map(i => `<div class="set-row">
+      <div><div class="nick">${esc(i.label)}</div>
+        <div class="uid8">${esc(i.key)} · 24 小时制，逗号分隔</div></div>
+      <input type="text" data-set="${esc(i.key)}" value="${esc((i.value || []).join(", "))}"
+             placeholder="9, 21" style="max-width:130px">
+    </div>`).join("") : "") +
+    `<div class="muted" style="margin-top:12px">国际版账号无签到体系，自动跳过（登录即送分）。</div>`;
+
+  $$("[data-set]").forEach(el => {
+    el.onchange = () => {
+      const key = el.dataset.set;
+      if (el.type === "checkbox") SETTINGS_DIRTY[key] = el.checked;
+      else SETTINGS_DIRTY[key] = el.value.split(/[,\s]+/).filter(Boolean).map(Number);
+      $("#set-hint").textContent = `有 ${Object.keys(SETTINGS_DIRTY).length} 项待保存`;
+    };
+  });
+
+  const ro = d.readonly || {};
+  const labels = { listen: "监听地址", auth_dir: "凭证目录", usage_file: "用量日志",
+                   prompt_mode: "提示词模式", max_in_flight: "单号最大并发",
+                   soft_rate: "软冷却基数", sanitize: "出站指纹脱敏" };
+  $("#set-readonly").innerHTML = Object.entries(labels).map(([k, lab]) =>
+    `<span class="k">${lab}</span><span class="row"><code>${esc(String(ro[k] ?? "-"))}</code></span>`
+  ).join("");
+  const ps = (window.__promptState || {});
+  $("#set-path").textContent = "~/workbuddy2api/config.json";
+}
+
+async function saveSettings() {
+  const changes = { ...SETTINGS_DIRTY };
+  if (!Object.keys(changes).length) { toast("没有修改"); return; }
+  if (!confirm(`将保存 ${Object.keys(changes).length} 项设置并重启网关服务。\n\n继续？`)) return;
+  $("#btn-save-settings").disabled = true;
+  try {
+    const r = await api("/settings", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ changes }) });
+    toast(`已保存 ${r.applied.length} 项，服务已重启`, "ok");
+    SETTINGS_DIRTY = {};
+    await loadSettings();
+    refreshAll();
+  } catch (e) { toast("保存失败：" + e.message, "err"); }
+  finally { $("#btn-save-settings").disabled = false; }
+}
+
 async function restartApi() {
   if (!confirm("确定重启网关服务？进行中的请求会中断。")) return;
   toast("正在重启…");
@@ -874,6 +1003,8 @@ $("#btn-login-done").onclick = manualClaim;
 $("#btn-export").onclick = exportAccounts;
 $("#btn-import").onclick = () => $("#import-file").click();
 $("#btn-usage").onclick = loadUsage;
+$$("#nav-seg .seg-b").forEach(b => b.onclick = () => showView(b.dataset.view));
+$("#btn-save-settings").onclick = saveSettings;
 $("#import-file").onchange = e => {
   const f = e.target.files?.[0];
   if (f) importAccounts(f);
