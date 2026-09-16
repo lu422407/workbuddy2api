@@ -228,6 +228,15 @@
         </span></h2>
       <div id="usage-body"><div class="empty">加载中…</div></div>
     </section>
+
+    <section class="card">
+      <h2><span class="ico">🧩</span>MiMo 反代
+        <span class="act">
+          <span class="muted" id="mimo-hint"></span>
+          <button class="small" id="btn-mimo">刷新</button>
+        </span></h2>
+      <div id="mimo-body"><div class="empty">加载中…</div></div>
+    </section>
   </div>
 
   <!-- 右列：操作 -->
@@ -735,6 +744,63 @@ async function saveSettings() {
   finally { $("#btn-save-settings").disabled = false; }
 }
 
+/* ---------- MiMo 反代（独立服务，只做本机状态展示） ---------- */
+async function loadMimo() {
+  $("#mimo-body").innerHTML = `<div class="empty">加载中…</div>`;
+  try {
+    const d = await api("/mimo");
+    renderMimo(d);
+  } catch (e) {
+    $("#mimo-body").innerHTML = `<div class="empty" style="color:var(--bad)">读取失败：${esc(e.message)}</div>`;
+  }
+}
+
+function renderMimo(d) {
+  if (!d.up) {
+    $("#mimo-hint").textContent = "";
+    $("#mimo-body").innerHTML = `<div class="muted">
+      未检测到 MiMo 反代服务（${esc(d.base || "")}）。<br>
+      它把小米 MiMo Desktop 账号会话转为 OpenAI 兼容 API，与 WorkBuddy 网关是<b>独立进程</b>，
+      单独启停、各自一组凭证。</div>
+      <div class="num" style="color:var(--warn);margin-top:8px">${esc(d.error || "")}</div>`;
+    return;
+  }
+  const accs = d.accounts || [], models = d.models || [];
+  $("#mimo-hint").textContent = `${accs.length} 个账号 · ${models.length} 个模型`;
+
+  const accRows = accs.length ? accs.map(a => `<tr>
+      <td>${esc(a.uid || "-")}<div class="uid8">${esc((a.user_id || "").slice(0, 16))}</div></td>
+      <td><span class="stbadge ${a.is_valid ? "ok" : "warn"}">${a.is_valid ? "可用" : "未验证"}</span></td>
+      <td class="num muted">${a.has_session ? "已缓存" : "未缓存"}</td>
+      <td class="num muted">${a.login_time ? esc(String(a.login_time).slice(0, 16)) : "-"}</td>
+    </tr>`).join("") : "";
+
+  const modelTags = models.length
+    ? models.map(m => `<span class="badge">${esc(typeof m === "string" ? m : (m.id || m.name || JSON.stringify(m)))}</span>`).join(" ")
+    : `<span class="muted">尚未探测到模型（需先导入 Desktop 账号）</span>`;
+
+  $("#mimo-body").innerHTML = `
+    <div class="tiles" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
+      <div class="tile"><b>${accs.length}</b><span>Desktop 账号</span></div>
+      <div class="tile"><b>${accs.filter(a => a.is_valid).length}</b><span>可用</span></div>
+      <div class="tile"><b>${models.length}</b><span>模型</span></div>
+    </div>
+    ${accRows ? `<table><tr><th>账号</th><th>状态</th><th>会话</th><th>登录时间</th></tr>${accRows}</table>`
+      : `<div class="muted">还没有导入 Desktop 账号。凭证来自 MiMo Desktop 的登录会话
+         （<code>passToken</code>），与 WorkBuddy 的 OAuth 凭证体系完全不同，
+         需在装了 Desktop 的机器上产生。</div>`}
+    <div class="kv" style="margin-top:12px">
+      <span class="k">服务地址</span><span class="row"><code>${esc(d.base)}</code>
+        <button class="small" data-copy-inline="${esc(d.base)}">复制</button></span>
+      <span class="k">API Key</span><span class="row"><code>${esc((d.api_key || "").slice(0, 12) + "…")}</code>
+        <button class="small" data-copy-inline="${esc(d.api_key || "")}">复制</button></span>
+    </div>
+    <div class="muted" style="margin-top:10px">模型：${modelTags}</div>
+    <div class="muted" style="margin-top:8px">
+      这是独立于 WorkBuddy 池的第二个网关，各账号额度互不相通。</div>`;
+  $$("[data-copy-inline]").forEach(b => b.onclick = () => copyText(b.dataset.copyInline));
+}
+
 async function restartApi() {
   if (!confirm("确定重启网关服务？进行中的请求会中断。")) return;
   toast("正在重启…");
@@ -1017,6 +1083,7 @@ $("#btn-login-done").onclick = manualClaim;
 $("#btn-export").onclick = exportAccounts;
 $("#btn-import").onclick = () => $("#import-file").click();
 $("#btn-usage").onclick = loadUsage;
+$("#btn-mimo").onclick = loadMimo;
 $$("#nav-seg .seg-b").forEach(b => b.onclick = () => showView(b.dataset.view));
 $("#btn-save-settings").onclick = saveSettings;
 $("#import-file").onchange = e => {
@@ -1037,6 +1104,7 @@ $("#m-in").addEventListener("keydown", e => {
   await Promise.all([loadHealth(), loadAccounts(), loadConnection(), loadCheckinLog()]);
   loadExpiries(false);
   loadUsage();
+  loadMimo();
   await loadModels();
   try { const s = await api("/login/status"); if (s.pending && s.url) {
     setRealm(s.realm || "cn");

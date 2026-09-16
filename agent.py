@@ -233,6 +233,118 @@ def prompt_state():
             "reason": "客户端 system 提示词已被替换为中性提示词（持续到北京时间次日 00:00 或网关重启）"}
 
 
+# ---------- MiMo（独立反代，纳管到同一控制台） ----------
+# MiMo Desktop 反代（Fly143/xiaomi-mimo-desktop-api）跑在独立进程/端口，
+# 这里只做"代理查询"，不接管它的生命周期：它的凭证体系（Desktop cookie 换 SSO）
+# 与 wb2api（OAuth 设备流）完全不同，代码也不宜合并（Python/FastAPI vs Go）。
+MIMO_BASE = os.environ.get("MIMO_BASE", "http://127.0.0.1:7870")
+MIMO_CONFIG = os.environ.get("MIMO_CONFIG", os.path.expanduser("~/xiaomi-mimo-desktop-api/config.json"))
+
+
+_mimo_cred_cache = {"ts": 0, "val": None}
+MIMO_VENV_PY = os.path.join(os.path.dirname(MIMO_CONFIG), ".venv", "bin", "python")
+
+
+def _mimo_decrypt(value):
+    """解密 MiMo 反代的 Fernet 密文（enc:v1: 前缀）。
+
+    该项目的 admin_password / api_keys 落盘时用 Fernet 加密，密钥在同目录 .secret_key。
+    管理接口本身就要这个密码（鸡生蛋），只能拿密钥直接解。
+
+    为什么 shell out 而不是 import cryptography：agent 由系统 /usr/bin/python3
+    (3.9) 启动，没装 cryptography；而 MiMo 自己的 venv 有。走子进程复用它的运行时，
+    与本脚本既有的"调用外部二进制"风格一致，也避免给系统 python 装第三方包。
+    解密失败一律返回原值（可能是明文 / 老版本配置）。
+    """
+    if not isinstance(value, str) or not value.startswith("enc:v1:"):
+        return value
+    if not os.path.exists(MIMO_VENV_PY):
+        return value
+    script = (
+        "import sys;from cryptography.fernet import Fernet;"
+        "k=open(sys.argv[2],'rb').read().strip();"
+        "sys.stdout.write(Fernet(k).decrypt(sys.argv[1][7:].encode()).decode())"
+    )
+    try:
+        p = subprocess.run([MIMO_VENV_PY, "-c", script, value,
+                            os.path.join(os.path.dirname(MIMO_CONFIG), ".secret_key")],
+                           capture_output=True, timeout=15, encoding="utf-8", errors="replace")
+        if p.returncode == 0 and p.stdout:
+            return p.stdout
+    except Exception:  # noqa: BLE001
+        pass
+    return value
+
+
+def mimo_creds():
+    """读 MiMo 反代的 API Key 与管理密码（解密后；用于代理它的管理接口）。
+
+    密码/Key 很少变，缓存 60 秒，避免每次 /mimo 都起子进程解密。
+    """
+    if _mimo_cred_cache["val"] is not None and time.time() - _mimo_cred_cache["ts"] < 60:
+        return _mimo_cred_cache["val"]
+    try:
+        with open(MIMO_CONFIG, encoding="utf-8") as f:
+            cfg = json.load(f)
+        keys = _mimo_decrypt(cfg.get("api_keys") or "").split(",")
+        val = {"api_key": (keys[0] or "").strip(),
+               "admin_password": _mimo_decrypt(cfg.get("admin_password") or "")}
+    except Exception:  # noqa: BLE001
+        val = {"api_key": "", "admin_password": ""}
+    _mimo_cred_cache["ts"] = time.time()
+    _mimo_cred_cache["val"] = val
+    return val
+
+
+def _mimo_get(path, timeout=8, admin=False):
+    """请求 MiMo 反代；admin=True 时带 Basic 认证（管理接口需要）。"""
+    c = mimo_creds()
+    req = urllib.request.Request(MIMO_BASE + path)
+    if admin:
+        if not c["admin_password"]:
+            return None, "未读到 MiMo 管理密码（检查 config.json）"
+        import base64
+        token = base64.b64encode(f"admin:{c['admin_password']}".encode()).decode()
+        req.add_header("Authorization", "Basic " + token)
+    elif c["api_key"]:
+        req.add_header("Authorization", "Bearer " + c["api_key"])
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode() or "{}"), None
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return None, "鉴权失败（API Key/管理密码不符）"
+        return None, f"HTTP {e.code}"
+    except Exception as e:  # noqa: BLE001
+        return None, f"{type(e).__name__}: {e}"
+
+
+def mimo_view():
+    """MiMo 反代的汇总状态：在线性 + 账号数 + 模型 + 用量。一次调用返回全部，
+    避免前端发多次请求（管理接口每次要 Basic 认证，拉齐更简单）。"""
+    out = {"base": MIMO_BASE, "up": False, "accounts": [], "models": [], "usage": None,
+           "error": ""}
+    models, err = _mimo_get("/api/models")
+    if err:
+        out["error"] = err
+        return out
+    out["up"] = True
+    out["models"] = (models or {}).get("models") or []
+
+    accs, err = _mimo_get("/api/accounts", admin=True)
+    if err:
+        out["error"] = err
+    else:
+        out["accounts"] = (accs or {}).get("accounts") or []
+
+    usage, err = _mimo_get("/api/usage", admin=True)
+    if not err:
+        out["usage"] = usage
+    c = mimo_creds()
+    out["api_key"] = c["api_key"]
+    return out
+
+
 def wb2api_status():
     cfg = {}
     try:
@@ -989,6 +1101,12 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception:  # noqa: BLE001
                         pass
                 self._send(200, usage_stats(days))
+            elif path == "/mimo":
+                v = mimo_view()
+                v["ok"] = v["up"]
+                if not v["up"]:
+                    v["error"] = v["error"] or "MiMo 反代未运行"
+                self._send(200, v)
             elif path == "/upstream/models":
                 self._proxy_upstream("GET", "/v1/models")
             else:
