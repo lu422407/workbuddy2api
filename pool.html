@@ -583,9 +583,10 @@ function renderUsage() {
     return;
   }
   const t = d.totals || {};
-  // 模型配色（按消耗降序固定分配，保证图与图例一致）
-  const models = (d.by_model || []).map(m => m.model);
+  // 模型配色：按 realm:model 分组后固定分配（同色系区分域）
+  const models = (d.by_model || []).map(m => m.key || m.model);
   const color = m => MODEL_COLORS[Math.max(0, models.indexOf(m)) % MODEL_COLORS.length];
+  const realmTx = r => (r === "global" ? "国际" : "国内");
 
   // 顶部数字
   const tiles = `
@@ -596,50 +597,63 @@ function renderUsage() {
       <div class="tile"><b>${fmtK(t.total)}</b><span>总 Token</span></div>
     </div>`;
 
+  // 分域汇总（国内 / 国际）——同名模型在两域是独立资源，必须分开看
+  const realms = d.by_realm || [];
+  const realmCards = realms.length > 1 ? `
+    <div class="tiles" style="grid-template-columns:repeat(${Math.min(realms.length,3)},1fr);margin-bottom:14px">
+      ${realms.map(r => `<div class="tile ${r.realm === "global" ? "" : ""}">
+        <b>${fmtK(r.total)}</b>
+        <span>${r.label} · ${r.requests} 次 · 消耗 ${r.credit}</span></div>`).join("")}
+    </div>` : "";
+
   // 堆叠柱状图（纯 CSS，无外部依赖）；左对齐，多日时自动铺开
   const daily = d.daily || [];
   const max = Math.max(0.01, ...daily.map(x => x.credit));
   const bars = daily.map(x => {
     const h = Math.max(3, (x.credit / max) * 92);
     const segs = (x.by_model || []).map(mm =>
-      `<i style="display:block;width:100%;height:${x.credit ? (mm.credit / x.credit) * 100 : 0}%;background:${color(mm.model)}"></i>`
+      `<i style="display:block;width:100%;height:${x.credit ? (mm.credit / x.credit) * 100 : 0}%;background:${color(mm.key || mm.model)}"
+          title="${realmTx(mm.realm)} ${mm.model}"></i>`
     ).join("");
     return `<div class="ubar" title="${x.day}｜消耗 ${x.credit.toFixed(2)}｜${x.requests} 次请求">
       <span class="ubar-fill" style="height:${h}%">${segs}</span>
       <span class="ubar-x">${x.day.slice(5).replace("-", "/")}</span></div>`;
   }).join("");
 
-  const legend = models.slice(0, 6).map(m =>
-    `<span class="ulegend"><i style="background:${color(m)}"></i>${esc(m)}</span>`).join("");
+  const legend = models.slice(0, 8).map(m => {
+    const mm = (d.by_model || []).find(x => (x.key || x.model) === m);
+    return `<span class="ulegend"><i style="background:${color(m)}"></i>${realmTx(mm?.realm)} ${esc(mm?.model || m)}</span>`;
+  }).join("");
 
   // 按账号
   const accRows = (d.by_account || []).map(a => `<tr>
-      <td>${esc(a.nickname || a.uid.slice(0, 8))}</td>
+      <td>${esc(a.nickname || a.uid.slice(0, 8))}
+          <span class="badge">${realmTx(a.realm)}</span></td>
       <td class="num">${a.requests}</td>
       <td class="num">${a.credit.toFixed(2)}</td>
       <td class="num">${fmtK(a.total)}</td>
     </tr>`).join("");
 
-  // 按模型
+  // 按模型（域 + 模型，两域同名模型各自成行）
   const modRows = (d.by_model || []).map(m => `<tr>
-      <td><span class="ulegend"><i style="background:${color(m.model)}"></i>${esc(m.model)}</span>
-          <span class="badge">${esc(m.realm || "cn")}</span></td>
+      <td><span class="ulegend"><i style="background:${color(m.key || m.model)}"></i>${esc(m.model)}</span>
+          <span class="badge">${realmTx(m.realm)}</span></td>
       <td class="num">${m.requests}</td>
       <td class="num">${m.credit.toFixed(2)}</td>
       <td class="num">${fmtK(m.total)}</td>
     </tr>`).join("");
 
-  $("#usage-body").innerHTML = tiles +
-    `<div class="muted" style="margin-bottom:6px">每日消耗（按模型分层）</div>
+  $("#usage-body").innerHTML = tiles + realmCards +
+    `<div class="muted" style="margin-bottom:6px">每日消耗（按域·模型分层）</div>
      <div class="uchart">${bars || '<div class="empty">暂无数据</div>'}</div>
      <div class="ulegends">${legend}</div>
      <div class="ugrid">
        <div><div class="muted" style="margin:12px 0 6px">按账号</div>
          <table><tr><th>账号</th><th>请求</th><th>消耗</th><th>Token</th></tr>${accRows}</table></div>
-       <div><div class="muted" style="margin:12px 0 6px">按模型</div>
-         <table><tr><th>模型</th><th>请求</th><th>消耗</th><th>Token</th></tr>${modRows}</table></div>
+       <div><div class="muted" style="margin:12px 0 6px">按域·模型</div>
+         <table><tr><th>域 / 模型</th><th>请求</th><th>消耗</th><th>Token</th></tr>${modRows}</table></div>
      </div>
-     <div class="muted" style="margin-top:10px">数据来自网关本地用量日志（每次成功请求一行），仅统计本机网关流量。</div>`;
+     <div class="muted" style="margin-top:10px">数据来自网关本地用量日志（每次成功请求一行），仅统计本机网关流量。国内与国际为独立额度，同名模型不合并。</div>`;
 }
 
 /* ---------- 设置视图 ---------- */

@@ -355,7 +355,7 @@ def usage_stats(days: int = 30):
                 "daily": [], "by_model": [], "by_account": [], "totals": {}}
 
     cutoff = time.time() - days * 86400
-    daily, by_model, by_account = {}, {}, {}
+    daily, by_model, by_account, by_realm = {}, {}, {}, {}
     totals = {"requests": 0, "credit": 0.0, "prompt": 0, "completion": 0, "total": 0}
     for ln in lines:
         try:
@@ -372,20 +372,32 @@ def usage_stats(days: int = 30):
         tot = int(e.get("total") or (prompt + comp))
         model = e.get("model") or "?"
         realm = e.get("realm") or "cn"
+        # 分域键：国内与国际常有同名模型（如两域都有 deepseek-v4.1-flash），
+        # 只按 model 聚合会把它们合成一行、丢掉域维度——这正是"看不到国际版用量"
+        # 的原因。用 realm:model 作键，域与模型各自独立成行。
+        mkey = f"{realm}:{model}"
 
         d = daily.setdefault(day, {"day": day, "requests": 0, "credit": 0.0,
                                    "prompt": 0, "completion": 0, "total": 0, "by_model": {}})
         d["requests"] += 1; d["credit"] += credit
         d["prompt"] += prompt; d["completion"] += comp; d["total"] += tot
-        dm = d["by_model"].setdefault(model, {"credit": 0.0, "total": 0, "requests": 0})
+        dm = d["by_model"].setdefault(mkey, {"realm": realm, "model": model,
+                                             "credit": 0.0, "total": 0, "requests": 0})
         dm["credit"] += credit; dm["total"] += tot; dm["requests"] += 1
 
-        m = by_model.setdefault(model, {"model": model, "realm": realm, "requests": 0,
-                                        "credit": 0.0, "prompt": 0, "completion": 0, "total": 0})
+        m = by_model.setdefault(mkey, {"key": mkey, "model": model, "realm": realm,
+                                       "requests": 0, "credit": 0.0,
+                                       "prompt": 0, "completion": 0, "total": 0})
         m["requests"] += 1; m["credit"] += credit
         m["prompt"] += prompt; m["completion"] += comp; m["total"] += tot
 
+        r = by_realm.setdefault(realm, {"realm": realm, "requests": 0, "credit": 0.0,
+                                        "prompt": 0, "completion": 0, "total": 0})
+        r["requests"] += 1; r["credit"] += credit
+        r["prompt"] += prompt; r["completion"] += comp; r["total"] += tot
+
         a = by_account.setdefault(e.get("uid") or "?", {"uid": e.get("uid") or "?",
+                                                         "realm": realm,
                                                          "requests": 0, "credit": 0.0,
                                                          "prompt": 0, "completion": 0, "total": 0})
         a["requests"] += 1; a["credit"] += credit
@@ -394,18 +406,27 @@ def usage_stats(days: int = 30):
         totals["requests"] += 1; totals["credit"] += credit
         totals["prompt"] += prompt; totals["completion"] += comp; totals["total"] += tot
 
-    # 昵称映射（uid → nickname），让前端显示可读名称
-    nick = {a["uid"]: (a.get("nickname") or a["uid"][:8]) for a in read_auths()}
+    # 昵称 + 域映射（uid → nickname / realm），让前端显示可读名称
+    nick, realm_of = {}, {}
+    for a in read_auths():
+        nick[a["uid"]] = a.get("nickname") or a["uid"][:8]
+    for a in read_auths():
+        realm_of[a["uid"]] = a.get("realm") or "cn"
     accs = list(by_account.values())
     for a in accs:
         a["nickname"] = nick.get(a["uid"], a["uid"][:8])
+        a["realm"] = a.get("realm") or realm_of.get(a["uid"], "cn")
     accs.sort(key=lambda x: -x["credit"])
 
     daily_list = sorted(daily.values(), key=lambda x: x["day"])
     for d in daily_list:
-        d["by_model"] = [{"model": k, **v} for k, v in
-                         sorted(d["by_model"].items(), key=lambda kv: -kv[1]["credit"])]
+        d["by_model"] = sorted(({"key": k, **v} for k, v in d["by_model"].items()),
+                               key=lambda x: -x["credit"])
     models = sorted(by_model.values(), key=lambda x: -x["credit"])
+    realms = sorted(by_realm.values(), key=lambda x: -x["credit"])
+    for r in realms:
+        r["label"] = "国际" if r["realm"] == "global" else "国内"
+        r["credit"] = round(r["credit"], 2)
     totals["credit"] = round(totals["credit"], 2)
 
     today = time.strftime("%Y-%m-%d")
@@ -417,7 +438,7 @@ def usage_stats(days: int = 30):
             "today_credit": sum_since(today),
             "week_credit": sum_since(d7),
             "month_credit": sum_since(month),
-            "daily": daily_list, "by_model": models,
+            "daily": daily_list, "by_model": models, "by_realm": realms,
             "by_account": accs, "totals": totals}
 
 
